@@ -1,0 +1,12 @@
+[package]
+name = "usb-otg"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+lazy_static = "1.4"
+util = { path = "../util" }
+regex = "1.7"
+tokio = { version = "1", features = ["full"] }

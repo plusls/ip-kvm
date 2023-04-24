@@ -1,0 +1,19 @@
+[package]
+name = "ip-kvm"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+usb-otg = { path = "usb-otg" }
+util = { path = "util" }
+tokio = { version = "1", features = ["full"] }
+
+[profile.release]
+codegen-units = 1
+#strip = true
+opt-level = "z"  # Optimize for size.
+lto = true
+
+#panic = "abort"
