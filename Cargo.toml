@@ -13,6 +13,7 @@ axum = { version = "0.6", features = ["ws", "headers"] }
 tower-http = { version = "0.4.0", features = ["fs", "trace"] }
 futures = "0.3"
 once_cell = "1"
+hyper = { version = "0.14", features = ["full"] }
 
 [profile.release]
 codegen-units = 1

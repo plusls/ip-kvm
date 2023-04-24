@@ -10,6 +10,11 @@ use axum::{
     routing,
     Server,
 };
+use axum::extract::State;
+use axum::http::Request;
+use axum::http::uri::Uri;
+use axum::response::Response;
+use hyper::{Body, client::HttpConnector};
 use once_cell::sync::OnceCell;
 use tokio::task::JoinSet;
 use tower_http::{
@@ -96,10 +101,13 @@ async fn main() -> error::Result<()> {
     }
 
     let assets_dir = PathBuf::from("ip-kvm-assets");
+    let client = Client::new();
 
     let app = Router::new()
         .fallback_service(ServeDir::new(assets_dir).append_index_html_on_directories(true))
+        .route("/stream", routing::get(stream_handler))
         .route("/keyboard", routing::get(keyboard::ws_handler))
+        .with_state(client)
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::default().include_headers(true)),
@@ -108,9 +116,29 @@ async fn main() -> error::Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     let server = Server::bind(&addr)
         .serve(app.into_make_service_with_connect_info::<SocketAddr>());
+    // .serve(app.into_make_service());
 
     join_set.spawn(async { server.await.unwrap() });
 
     while let Some(_) = join_set.join_next().await {}
     Ok(())
+}
+
+type Client = hyper::client::Client<HttpConnector, Body>;
+
+//
+async fn stream_handler(State(client): State<Client>, mut req: Request<Body>) -> Response<Body> {
+    let path = req.uri().path();
+    let path_query = req
+        .uri()
+        .path_and_query()
+        .map(|v| v.as_str())
+        .unwrap_or(path);
+
+    // TODO 可配置的 stream URL
+    let uri = format!("http://127.0.0.1:3001{}", path_query);
+
+    *req.uri_mut() = Uri::try_from(uri).unwrap();
+
+    client.request(req).await.unwrap()
 }

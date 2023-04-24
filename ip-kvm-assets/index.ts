@@ -128,5 +128,17 @@ socket.onmessage = function (event: MessageEvent) {
     console.log(data);
 }
 
+window.onresize = function (event: UIEvent) {
+    resize_video()
+}
+
+function resize_video() {
+    let img: HTMLImageElement = document.getElementById("video") as HTMLImageElement;
+    img.width = window.innerWidth - 10;
+    img.height = window.innerHeight - 20;
+}
+
+resize_video();
+
 document.addEventListener('keydown', on_key_down);
 document.addEventListener('keyup', on_key_up);
