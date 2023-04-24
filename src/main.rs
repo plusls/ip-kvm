@@ -28,7 +28,6 @@ const CONFIGFS_BASE: &str = "/sys/kernel/config/usb_gadget";
 struct DeviceCtx {
     configfs_base: String,
     keyboard_device: hid::keyboard::KeyboardDevice,
-
 }
 
 impl Drop for DeviceCtx {
@@ -59,6 +58,7 @@ impl DeviceCtx {
         gadget_info.configs.insert("c.1".into(), usb_config);
         gadget_info.strings.insert(0x409, Default::default());
 
+        // TODO 动态设置 udc，现在为 orange pi one plus 的 otg 口
         gadget_info.udc = "musb-hdrc.5.auto".into();
 
         gadget_info.bcd_usb = 0x210;  // USB 2.1
