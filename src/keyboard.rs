@@ -10,7 +10,7 @@ use futures::{SinkExt, StreamExt};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 
-use crate::DEVICE_CTX;
+use crate::DeviceCtx;
 
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -33,8 +33,8 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
 
     join_set.spawn(async move {
         let sender = Arc::new(Mutex::new(sender));
-        // 肯定不会是空，必然是在 DEVICE_CTX 初始化后才走到这
-        let keyboard_receiver = Arc::new(Mutex::new(DEVICE_CTX.get().unwrap().keyboard_device.keyboard_update_sender.subscribe()));
+        let device_ctx = DeviceCtx::instance();
+        let keyboard_receiver = Arc::new(Mutex::new(device_ctx.keyboard_device.keyboard_update_sender.subscribe()));
         loop {
             let timeout_sender = sender.clone();
 
@@ -75,7 +75,7 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
 
     join_set.spawn(async move {
         while let Some(Ok(msg)) = receiver.next().await {
-            if process_message(msg, who).is_break() {
+            if process_message(msg, who).await.is_break() {
                 break;
             }
         }
@@ -88,9 +88,26 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
     println!("Websocket context {} destroyed", who);
 }
 
-fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
+async fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
     match msg {
         Message::Binary(d) => {
+            let keyboard_device = &DeviceCtx::instance().keyboard_device;
+            if d.len() != 2 {
+                return ControlFlow::Break(());
+            } else if d[1] == 0 || d[1] == 1 {
+                if keyboard_device.set_key(d[0] as u16, d[1] == 1).await {
+                    let _ = keyboard_device.send().await;
+                    let _ = keyboard_device.send_legacy().await;
+                }
+            } else if d[1] == 2 || d[1] == 3 {
+                if keyboard_device.set_sys_control_key(d[0] as u16, d[1] == 3).await {
+                    let _ = keyboard_device.send().await;
+                    let _ = keyboard_device.send_legacy().await;
+                }
+            } else {
+                return ControlFlow::Break(());
+            }
+
             println!(">>> {} sent {} bytes: {:?}", who, d.len(), d);
         }
         Message::Close(c) => {

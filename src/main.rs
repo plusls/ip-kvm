@@ -24,11 +24,11 @@ mod keyboard;
 
 const CONFIGFS_BASE: &str = "/sys/kernel/config/usb_gadget";
 
-static DEVICE_CTX: OnceCell<Arc<DeviceCtx>> = OnceCell::new();
 
 struct DeviceCtx {
     configfs_base: String,
     keyboard_device: hid::keyboard::KeyboardDevice,
+
 }
 
 impl Drop for DeviceCtx {
@@ -37,8 +37,16 @@ impl Drop for DeviceCtx {
     }
 }
 
+
+static DEVICE_CTX_INSTANCE: OnceCell<Arc<DeviceCtx>> = OnceCell::new();
+
 impl DeviceCtx {
-    async fn new(configfs_base: &str) -> error::Result<Self> {
+    pub fn instance() -> Arc<Self> {
+        // 肯定不会是空，必然是在 DEVICE_CTX 初始化后才走到这
+        return DEVICE_CTX_INSTANCE.get().unwrap().clone();
+    }
+
+    pub async fn init(configfs_base: &str) -> error::Result<()> {
         let mut gadget_info: GadgetInfo = Default::default();
         gadget_info.functions.insert("hid.usb0".into(), Box::new(usb_otg::hid::keyboard::KEYBOARD_LEGACY_FHO.clone()));
         gadget_info.functions.insert("hid.usb1".into(), Box::new(usb_otg::hid::keyboard::KEYBOARD_FHO.clone()));
@@ -68,19 +76,21 @@ impl DeviceCtx {
         println!("keyboard_legacy_minor: {keyboard_legacy_minor} keyboard_minor: {keyboard_minor}");
 
         let keyboard_device = hid::keyboard::KeyboardDevice::new(keyboard_minor, keyboard_legacy_minor).await?;
-        Ok(Self {
+        DEVICE_CTX_INSTANCE.set(Arc::new(Self {
             configfs_base: configfs_base.into(),
             keyboard_device,
-        })
+        })).unwrap_or(());
+
+        Ok(())
     }
 }
 
 #[tokio::main]
 async fn main() -> error::Result<()> {
+    DeviceCtx::init(CONFIGFS_BASE).await?;
     let mut join_set = JoinSet::new();
-    DEVICE_CTX.set(Arc::new(DeviceCtx::new(CONFIGFS_BASE).await?)).unwrap_or(());
     {
-        let keyboard_device = &DEVICE_CTX.get().unwrap().keyboard_device;
+        let keyboard_device = &DEVICE_CTX_INSTANCE.get().unwrap().keyboard_device;
         join_set.spawn(keyboard_device.recv_loop());
         join_set.spawn(keyboard_device.recv_legacy_loop());
     }
@@ -96,7 +106,6 @@ async fn main() -> error::Result<()> {
         );
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
-
     let server = Server::bind(&addr)
         .serve(app.into_make_service_with_connect_info::<SocketAddr>());
 

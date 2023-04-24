@@ -353,15 +353,18 @@ impl Keyboard {
         return false;
     }
 
-    pub fn set_key(&mut self, key_id: u16, status: bool) {
+    pub fn set_key(&mut self, key_id: u16, status: bool) -> bool {
         let idx = key_id as usize / 8;
         if idx < self.keys.len() {
+            let prev = self.keys[idx];
             if status {
                 self.keys[idx] |= 1 << (key_id % 8) as u8;
             } else {
                 self.keys[idx] &= !(1 << (key_id % 8) as u8);
             }
+            return prev != self.keys[idx];
         }
+        false
     }
 
     pub fn get_sys_control_key(&self, sys_control_key_id: u16) -> bool {
@@ -373,16 +376,19 @@ impl Keyboard {
         return false;
     }
 
-    pub fn set_sys_control_key(&mut self, sys_control_key_id: u16, status: bool) {
+    pub fn set_sys_control_key(&mut self, sys_control_key_id: u16, status: bool) -> bool {
         let sys_control_key_id = sys_control_key_id - generic_desktop::usage_id::SYSTEM_POWER_DOWN;
         let idx = sys_control_key_id as usize / 8;
         if idx < self.sys_control_keys.len() {
+            let prev = self.sys_control_keys[idx];
             if status {
                 self.sys_control_keys[idx] |= 1 << (sys_control_key_id % 8) as u8;
             } else {
                 self.sys_control_keys[idx] &= !(1 << (sys_control_key_id % 8) as u8);
             }
+            return prev != self.sys_control_keys[idx];
         }
+        false
     }
 
 
@@ -406,7 +412,10 @@ impl Keyboard {
 
         let mut current_idx = 2;
         for i in 0..=usage_id::KEYBOARD_APPLICATION {
-            if current_idx >= ret.len() || self.get_key(i) {
+            if current_idx >= ret.len() {
+                break;
+            }
+            if self.get_key(i) {
                 ret[current_idx] = i as u8;
                 current_idx += 1;
             }
@@ -459,13 +468,13 @@ impl KeyboardDevice {
         Ok(ret)
     }
 
-    pub async fn set_key(&self, key_id: u16, status: bool) {
-        self.keyboard.lock().await
+    pub async fn set_key(&self, key_id: u16, status: bool) -> bool {
+        return self.keyboard.lock().await
             .set_key(key_id, status);
     }
 
-    pub async fn set_sys_control_key(&self, sys_control_key_id: u16, status: bool) {
-        self.keyboard.lock().await
+    pub async fn set_sys_control_key(&self, sys_control_key_id: u16, status: bool) -> bool {
+        return self.keyboard.lock().await
             .set_sys_control_key(sys_control_key_id, status);
     }
 
