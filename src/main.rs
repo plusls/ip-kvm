@@ -2,25 +2,15 @@
 
 use std::any::Any;
 use std::net::SocketAddr;
-use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
-    extract::{
-        TypedHeader,
-        ws::{Message, WebSocket, WebSocketUpgrade},
-    },
-    headers,
-    response::IntoResponse,
     Router,
     routing,
     Server,
 };
-use axum::extract::connect_info::ConnectInfo;
-use futures::{sink::SinkExt, stream::StreamExt};
 use once_cell::sync::OnceCell;
-use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tower_http::{
     services::ServeDir,
@@ -29,6 +19,8 @@ use tower_http::{
 use util::error;
 
 use usb_otg::{Configurable, GadgetInfo, hid, UsbConfiguration};
+
+mod keyboard;
 
 const CONFIGFS_BASE: &str = "/sys/kernel/config/usb_gadget";
 
@@ -97,7 +89,7 @@ async fn main() -> error::Result<()> {
 
     let app = Router::new()
         .fallback_service(ServeDir::new(assets_dir).append_index_html_on_directories(true))
-        .route("/keyboard", routing::get(ws_handler))
+        .route("/keyboard", routing::get(keyboard::ws_handler))
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::default().include_headers(true)),
@@ -112,112 +104,4 @@ async fn main() -> error::Result<()> {
 
     while let Some(_) = join_set.join_next().await {}
     Ok(())
-}
-
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    user_agent: Option<TypedHeader<headers::UserAgent>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-) -> impl IntoResponse {
-    let user_agent = if let Some(TypedHeader(user_agent)) = user_agent {
-        user_agent.to_string()
-    } else {
-        String::from("Unknown browser")
-    };
-    println!("`{user_agent}` at {addr} connected.");
-    ws.on_upgrade(move |socket| handle_socket(socket, addr))
-}
-
-async fn handle_socket(socket: WebSocket, who: SocketAddr) {
-    let (sender, mut receiver) = socket.split();
-
-    let mut join_set = JoinSet::new();
-
-    join_set.spawn(async move {
-        let sender = Arc::new(Mutex::new(sender));
-        let keyboard_receiver = Arc::new(Mutex::new(DEVICE_CTX.get().unwrap().keyboard_device.keyboard_update_sender.subscribe()));
-        loop {
-            let timeout_sender = sender.clone();
-
-            let mut join_set = JoinSet::new();
-            join_set.spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-                if timeout_sender.lock().await.send(Message::Ping(vec![1, 2, 3])).await.is_ok() {
-                    ControlFlow::Continue(())
-                } else {
-                    ControlFlow::Break(())
-                }
-            });
-
-            let keyboard_status_sender = sender.clone();
-            let keyboard_receiver = keyboard_receiver.clone();
-            join_set.spawn(async move {
-                let mut keyboard_receiver = keyboard_receiver.lock().await;
-                let mut keyboard_status_sender = keyboard_status_sender.lock().await;
-                let keyboard_status = keyboard_receiver.borrow_and_update().to_vec();
-                if keyboard_receiver.changed().await.is_ok() &&
-                    keyboard_status_sender.send(Message::Binary(keyboard_status)).await.is_ok()
-                {
-                    ControlFlow::Continue(())
-                } else {
-                    ControlFlow::Break(())
-                }
-            });
-
-            if let Some(res) = join_set.join_next().await {
-                if res.unwrap().is_break() {
-                    break;
-                }
-            }
-            join_set.shutdown().await;
-        }
-    });
-
-    join_set.spawn(async move {
-        while let Some(Ok(msg)) = receiver.next().await {
-            if process_message(msg, who).is_break() {
-                break;
-            }
-        }
-    });
-
-    let _ = join_set.join_next().await;
-    join_set.shutdown().await;
-
-
-    println!("Websocket context {} destroyed", who);
-}
-
-/// helper to print contents of messages to stdout. Has special treatment for Close.
-fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
-    match msg {
-        Message::Text(t) => {
-            println!(">>> {} sent str: {:?}", who, t);
-        }
-        Message::Binary(d) => {
-            println!(">>> {} sent {} bytes: {:?}", who, d.len(), d);
-        }
-        Message::Close(c) => {
-            if let Some(cf) = c {
-                println!(
-                    ">>> {} sent close with code {} and reason `{}`",
-                    who, cf.code, cf.reason
-                );
-            } else {
-                println!(">>> {} somehow sent close message without CloseFrame", who);
-            }
-            return ControlFlow::Break(());
-        }
-
-        Message::Pong(v) => {
-            println!(">>> {} sent pong with {:?}", who, v);
-        }
-        // You should never need to manually handle Message::Ping, as axum's websocket library
-        // will do so for you automagically by replying with Pong and copying the v according to
-        // spec. But if you need the contents of the pings you can see them here.
-        Message::Ping(v) => {
-            println!(">>> {} sent ping with {:?}", who, v);
-        }
-    }
-    ControlFlow::Continue(())
 }
