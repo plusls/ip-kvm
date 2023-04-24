@@ -73,7 +73,7 @@ pub struct GadgetInfo {
     pub b_device_sub_class: u8,
     pub b_max_packet_size0: u8,
     pub configs: HashMap<String, UsbConfiguration>,
-    pub functions: HashMap<String, Box<dyn UsbFunctionOpts>>,
+    pub functions: HashMap<String, Box<dyn UsbFunctionOpts + Sync + Send>>,
     pub id_product: u16,
     pub id_vendor: u16,
     pub max_speed: UsbDeviceSpeed,

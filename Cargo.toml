@@ -9,6 +9,10 @@ edition = "2021"
 usb-otg = { path = "usb-otg" }
 util = { path = "util" }
 tokio = { version = "1", features = ["full"] }
+axum = { version = "0.6", features = ["ws", "headers"] }
+tower-http = { version = "0.4.0", features = ["fs", "trace"] }
+futures = "0.3"
+once_cell = "1"
 
 [profile.release]
 codegen-units = 1

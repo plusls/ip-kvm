@@ -1,10 +1,8 @@
-use std::sync::Arc;
-
 use lazy_static::lazy_static;
 use tokio::fs::{File, OpenOptions};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
-use tokio::task::JoinSet;
+use tokio::sync::watch::Sender;
 use util::error;
 
 use crate::hid;
@@ -424,10 +422,11 @@ pub struct KeyboardDevice {
     keyboard_dev_write: Mutex<File>,
     keyboard_legacy_dev_read: Mutex<File>,
     keyboard_legacy_dev_write: Mutex<File>,
+    pub keyboard_update_sender: Sender<[u8; 0x20]>,
 }
 
 impl KeyboardDevice {
-    pub async fn new(join_set: &mut JoinSet<()>, keyboard_minor: i32, keyboard_legacy_minor: i32) -> error::Result<Arc<Self>> {
+    pub async fn new(keyboard_minor: i32, keyboard_legacy_minor: i32) -> error::Result<Self> {
         let keyboard_dev_name = format!("/dev/hidg{keyboard_minor}");
         let keyboard_legacy_dev_name = format!("/dev/hidg{keyboard_legacy_minor}");
 
@@ -447,18 +446,15 @@ impl KeyboardDevice {
             .open(&keyboard_legacy_dev_name).await
             .map_err(|err| error::ErrorKind::fs(err, &keyboard_legacy_dev_name))?;
 
-        let ret = Arc::new(Self {
+        let (sender, _) = tokio::sync::watch::channel([0; 0x20]);
+        let ret = Self {
             keyboard: Default::default(),
             keyboard_dev_read: Mutex::new(keyboard_dev_read),
             keyboard_dev_write: Mutex::new(keyboard_dev_write),
             keyboard_legacy_dev_read: Mutex::new(keyboard_legacy_dev_read),
             keyboard_legacy_dev_write: Mutex::new(keyboard_legacy_dev_write),
-        });
-
-        let ret_recv = ret.clone();
-        let ret_recv_legacy = ret.clone();
-        join_set.spawn(KeyboardDevice::recv_loop(ret_recv));
-        join_set.spawn(KeyboardDevice::recv_legacy_loop(ret_recv_legacy));
+            keyboard_update_sender: sender,
+        };
 
         Ok(ret)
     }
@@ -473,24 +469,31 @@ impl KeyboardDevice {
             .set_sys_control_key(sys_control_key_id, status);
     }
 
-    async fn recv_legacy(&self) -> error::Result<()> {
+    pub async fn recv_legacy(&self) -> error::Result<()> {
         let mut led_buf = [0_u8];
-        println!("pre recv_legacy get lock");
         let mut keyboard_legacy_dev_read = self.keyboard_legacy_dev_read.lock().await;
-        println!("pre recv_legacy");
         keyboard_legacy_dev_read.read_exact(&mut led_buf).await
             .map_err(|err| error::ErrorKind::fs(err, "keyboard_legacy_dev"))?;
         println!("keyboard_legacy_dev: {led_buf:?}");
         let mut keyboard = self.keyboard.lock().await;
         keyboard.led[0] = (keyboard.led[0] & 0xe0) | (led_buf[0] & 0x1f);
+
+        self.keyboard_update_sender.send_if_modified(|keyboard_state| {
+            if keyboard.led[0] != keyboard_state[0] {
+                keyboard_state[0] = keyboard.led[0];
+                true
+            } else {
+                false
+            }
+        });
+
         Ok(())
     }
 
-    async fn recv(&self) -> error::Result<()> {
+
+    pub async fn recv(&self) -> error::Result<()> {
         let mut led_buf = [0_u8; 0x20];
-        println!("pre recv get lock");
         let mut keyboard_dev_read = self.keyboard_dev_read.lock().await;
-        println!("pre recv");
         let read_len = keyboard_dev_read.read(&mut led_buf).await
             .map_err(|err| error::ErrorKind::fs(err, "keyboard_dev"))?;
         if read_len != 0x20 {
@@ -498,25 +501,34 @@ impl KeyboardDevice {
             return Ok(());
         }
         println!("keyboard_dev: {led_buf:?}");
-        self.keyboard.lock().await
-            .led.copy_from_slice(&led_buf);
+        let mut keyboard = self.keyboard.lock().await;
+        keyboard.led.copy_from_slice(&led_buf);
+        self.keyboard_update_sender.send_if_modified(|keyboard_state| {
+            let mut ret = false;
+            for i in 0..0x20_usize {
+                if keyboard_state[i] != keyboard.led[i] {
+                    keyboard_state[i] = keyboard.led[i];
+                    ret = true;
+                }
+            }
+            ret
+        });
         Ok(())
     }
 
-    async fn recv_loop(self: Arc<Self>) {
+    pub async fn recv_loop(&self) {
         loop {
             let _ = self.recv().await.unwrap();
         }
     }
 
-    async fn recv_legacy_loop(self: Arc<Self>) {
+    pub async fn recv_legacy_loop(&self) {
         loop {
             let _ = self.recv_legacy().await.unwrap();
         }
     }
 
     pub async fn send(&self) -> error::Result<()> {
-        println!("pre send get lock");
         let mut keyboard_dev = self.keyboard_dev_write.lock().await;
         let payload = self.keyboard.lock().await.get_payload();
         println!("send {payload:?}");
@@ -524,20 +536,16 @@ impl KeyboardDevice {
             .map_err(|err| error::ErrorKind::fs(err, "keyboard_dev write_all"))?;
         keyboard_dev.flush().await
             .map_err(|err| error::ErrorKind::fs(err, "keyboard_dev flush"))?;
-        println!("sended");
         Ok(())
     }
     pub async fn send_legacy(&self) -> error::Result<()> {
-        println!("pre send_legacy get lock");
         let mut keyboard_legacy_dev = self.keyboard_legacy_dev_write.lock().await;
-        println!("pre send_legacy");
         let payload = self.keyboard.lock().await.get_legacy_payload();
         println!("send_legacy {payload:?}");
         keyboard_legacy_dev.write_all(&payload).await
             .map_err(|err| error::ErrorKind::fs(err, "keyboard_legacy_dev write_all"))?;
         keyboard_legacy_dev.flush().await
             .map_err(|err| error::ErrorKind::fs(err, "keyboard_legacy_dev flush"))?;
-        println!("sended");
         Ok(())
     }
 }
