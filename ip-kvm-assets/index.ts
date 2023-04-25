@@ -17,10 +17,14 @@ function set_key(event: KeyboardEvent, status: number) {
 
 function on_key_up(event: KeyboardEvent) {
     set_key(event, 0);
+    event.preventDefault();
+    event.stopPropagation();
 }
 
 function on_key_down(event: KeyboardEvent) {
     set_key(event, 1);
+    event.preventDefault();
+    event.stopPropagation();
 }
 
 
