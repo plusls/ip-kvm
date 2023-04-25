@@ -123,7 +123,8 @@ impl Configurable for GadgetInfo {
         }
         fs::write(base_dir.join("idProduct"), self.id_product.to_string())?;
         fs::write(base_dir.join("idVendor"), self.id_vendor.to_string())?;
-        fs::write(base_dir.join("max_speed"), self.max_speed.as_str())?;
+        // 低版本内核可能没有这个
+        let _ = fs::write(base_dir.join("max_speed"), self.max_speed.as_str());
         if let Some(os_desc) = &mut self.os_desc {
             os_desc.apply_config(&base_dir.join("os_desc"))?;
         }

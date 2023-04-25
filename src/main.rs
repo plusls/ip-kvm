@@ -22,6 +22,7 @@ use tower_http::{
     trace::{DefaultMakeSpan, TraceLayer},
 };
 use util::error;
+use util::error::ErrorKind;
 
 use usb_otg::{Configurable, GadgetInfo, hid, UsbConfiguration};
 
@@ -44,6 +45,8 @@ impl Drop for DeviceCtx {
 
 static DEVICE_CTX_INSTANCE: OnceCell<Arc<DeviceCtx>> = OnceCell::new();
 
+const UDC_PATH: &str = "/sys/class/udc";
+
 impl DeviceCtx {
     pub fn instance() -> Arc<Self> {
         // 肯定不会是空，必然是在 DEVICE_CTX 初始化后才走到这
@@ -63,8 +66,25 @@ impl DeviceCtx {
         gadget_info.configs.insert("c.1".into(), usb_config);
         gadget_info.strings.insert(0x409, Default::default());
 
-        // TODO 动态设置 udc，现在为 orange pi one plus 的 otg 口
-        gadget_info.udc = "musb-hdrc.5.auto".into();
+
+        let mut udc_name = None;
+        for entry in util::fs::read_dir(UDC_PATH)? {
+            let entry = entry.map_err(|err| ErrorKind::fs(err, UDC_PATH))?;
+            let path = entry.path();
+            if let Some(path_file_name) = path.file_name() {
+                if let Some(path_file_name) = path_file_name.to_str() {
+                    udc_name = Some(path_file_name.to_string());
+                    break;
+                }
+            }
+        }
+
+        if let Some(udc_name) = udc_name {
+            gadget_info.udc = udc_name;
+        } else {
+            Err(ErrorKind::custom("Can not found udc".into()))?;
+        }
+
 
         gadget_info.bcd_usb = 0x210;  // USB 2.1
 

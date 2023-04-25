@@ -42,7 +42,8 @@ impl Configurable for FunctionHidOpts {
         let base_dir = base_dir.as_ref();
         fs::create_dir(base_dir)?;
         self.read_dev(&base_dir)?;
-        fs::write(base_dir.join("no_out_endpoint"), self.no_out_endpoint.to_string())?;
+        // 低版本内核可能没这个
+        let _ = fs::write(base_dir.join("no_out_endpoint"), self.no_out_endpoint.to_string());
         fs::write(base_dir.join("protocol"), self.protocol.to_string())?;
         fs::write(base_dir.join("report_desc"), &self.report_desc)?;
         fs::write(base_dir.join("report_length"), self.report_length.to_string())?;
@@ -54,11 +55,12 @@ impl Configurable for FunctionHidOpts {
         let mut ret = Self {
             major: 0,
             minor: 0,
-            no_out_endpoint: u8::from_str(&fs::read_to_string(base_dir.join("no_out_endpoint"))?).unwrap(),
+            // 内核保证了 no_out_endpoint 的数据一定是合法的
+            no_out_endpoint: u8::from_str(&fs::read_to_string(base_dir.join("no_out_endpoint")).unwrap_or("0".into())).unwrap(),
             protocol: u8::from_str(&fs::read_to_string(base_dir.join("protocol"))?).unwrap(),
             report_desc: fs::read(base_dir.join("report_desc"))?,
             report_length: u16::from_str(&fs::read_to_string(base_dir.join("report_length"))?).unwrap(),
-            subclass: u8::from_str(&fs::read_to_string(base_dir.join("no_out_endpoint"))?).unwrap(),
+            subclass: u8::from_str(&fs::read_to_string(base_dir.join("subclass"))?).unwrap(),
         };
         ret.read_dev(&base_dir)?;
         Ok(ret)
