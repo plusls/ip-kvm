@@ -8,6 +8,7 @@ use util::fs;
 use crate::{Configurable, error, UsbFunctionOpts};
 
 pub mod keyboard;
+pub mod mouse;
 pub mod generic_desktop;
 
 #[derive(Clone)]

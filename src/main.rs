@@ -27,6 +27,8 @@ use util::error::ErrorKind;
 use usb_otg::{Configurable, GadgetInfo, hid, UsbConfiguration};
 
 mod keyboard;
+mod mouse;
+mod mouse_legacy;
 
 const CONFIGFS_BASE: &str = "/sys/kernel/config/usb_gadget";
 
@@ -34,6 +36,7 @@ const CONFIGFS_BASE: &str = "/sys/kernel/config/usb_gadget";
 struct DeviceCtx {
     configfs_base: String,
     keyboard_device: hid::keyboard::KeyboardDevice,
+    mouse_device: hid::mouse::MouseDevice,
 }
 
 impl Drop for DeviceCtx {
@@ -57,11 +60,15 @@ impl DeviceCtx {
         let mut gadget_info: GadgetInfo = Default::default();
         gadget_info.functions.insert("hid.usb0".into(), Box::new(usb_otg::hid::keyboard::KEYBOARD_LEGACY_FHO.clone()));
         gadget_info.functions.insert("hid.usb1".into(), Box::new(usb_otg::hid::keyboard::KEYBOARD_FHO.clone()));
+        gadget_info.functions.insert("hid.usb2".into(), Box::new(usb_otg::hid::mouse::MOUSE_LEGACY_FHO.clone()));
+        gadget_info.functions.insert("hid.usb3".into(), Box::new(usb_otg::hid::mouse::MOUSE_FHO.clone()));
 
         let mut usb_config: UsbConfiguration = Default::default();
         usb_config.strings.insert(0x409, Default::default());
         usb_config.functions.push("hid.usb0".into());
         usb_config.functions.push("hid.usb1".into());
+        usb_config.functions.push("hid.usb2".into());
+        usb_config.functions.push("hid.usb3".into());
 
         gadget_info.configs.insert("c.1".into(), usb_config);
         gadget_info.strings.insert(0x409, Default::default());
@@ -98,12 +105,21 @@ impl DeviceCtx {
         let keyboard_minor = (gadget_info.functions.get("hid.usb1").unwrap().as_ref() as &dyn Any)
             .downcast_ref::<hid::FunctionHidOpts>().unwrap().minor;
 
+        let mouse_legacy_minor = (gadget_info.functions.get("hid.usb2").unwrap().as_ref() as &dyn Any)
+            .downcast_ref::<hid::FunctionHidOpts>().unwrap().minor;
+
+        let mouse_minor = (gadget_info.functions.get("hid.usb3").unwrap().as_ref() as &dyn Any)
+            .downcast_ref::<hid::FunctionHidOpts>().unwrap().minor;
+
         println!("keyboard_legacy_minor: {keyboard_legacy_minor} keyboard_minor: {keyboard_minor}");
+        println!("mouse_legacy_minor: {mouse_legacy_minor} mouse_minor: {mouse_minor}");
 
         let keyboard_device = hid::keyboard::KeyboardDevice::new(keyboard_minor, keyboard_legacy_minor).await?;
+        let mouse_device = hid::mouse::MouseDevice::new(mouse_minor, mouse_legacy_minor).await?;
         DEVICE_CTX_INSTANCE.set(Arc::new(Self {
             configfs_base: configfs_base.into(),
             keyboard_device,
+            mouse_device,
         })).unwrap_or(());
 
         Ok(())
@@ -127,6 +143,9 @@ async fn main() -> error::Result<()> {
         .fallback_service(ServeDir::new(assets_dir).append_index_html_on_directories(true))
         .route("/stream", routing::get(stream_handler))
         .route("/keyboard", routing::get(keyboard::ws_handler))
+        .route("/mouse", routing::get(mouse::ws_handler))
+        .route("/mouse_legacy", routing::get(mouse_legacy::ws_handler))
+
         .with_state(client)
         .layer(
             TraceLayer::new_for_http()
@@ -146,7 +165,6 @@ async fn main() -> error::Result<()> {
 
 type Client = hyper::client::Client<HttpConnector, Body>;
 
-//
 async fn stream_handler(State(client): State<Client>, mut req: Request<Body>) -> Response<Body> {
     let path = req.uri().path();
     let path_query = req
