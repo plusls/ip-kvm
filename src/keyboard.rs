@@ -92,20 +92,24 @@ async fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
     match msg {
         Message::Binary(d) => {
             let keyboard_device = &DeviceCtx::instance().keyboard_device;
-            if d.len() != 2 {
+            if d.len() != 3 || (d[0] != 0 && d[0] != 1) {
                 return ControlFlow::Break(());
-            } else if d[1] == 0 || d[1] == 1 {
-                if keyboard_device.set_key(d[0] as u16, d[1] == 1).await {
-                    let _ = keyboard_device.send().await;
-                    let _ = keyboard_device.send_legacy().await;
+            } else if d[0] == 0 {
+                if d[2] != 0 && d[2] != 1 {
+                    return ControlFlow::Break(());
                 }
-            } else if d[1] == 2 || d[1] == 3 {
-                if keyboard_device.set_sys_control_key(d[0] as u16, d[1] == 3).await {
+                if keyboard_device.set_key(d[1] as u16, d[2] == 1).await {
                     let _ = keyboard_device.send().await;
                     let _ = keyboard_device.send_legacy().await;
                 }
             } else {
-                return ControlFlow::Break(());
+                if d[2] != 0 || d[2] != 1 {
+                    return ControlFlow::Break(());
+                }
+                if keyboard_device.set_sys_control_key(d[1] as u16, d[2] == 1).await {
+                    let _ = keyboard_device.send().await;
+                    let _ = keyboard_device.send_legacy().await;
+                }
             }
 
             println!(">>> {} sent {} bytes: {:?}", who, d.len(), d);

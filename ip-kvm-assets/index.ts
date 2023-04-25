@@ -7,24 +7,29 @@ function set_key(event: KeyboardEvent, status: number) {
         return;
     }
     let hid_code = keycode_hid_map[event.code];
-    let buffer = new ArrayBuffer(2);
+    let buffer = new ArrayBuffer(3);
 
     let view = new Uint8Array(buffer);
-    view[0] = hid_code;
-    view[1] = status;
+    view[0] = 0;
+    view[1] = hid_code;
+    view[2] = status;
     socket.send(buffer);
 }
 
 function on_key_up(event: KeyboardEvent) {
-    set_key(event, 0);
-    event.preventDefault();
-    event.stopPropagation();
+    if (document.activeElement.id != "stream_url") {
+        set_key(event, 0);
+        event.preventDefault();
+        event.stopPropagation();
+    }
 }
 
 function on_key_down(event: KeyboardEvent) {
-    set_key(event, 1);
-    event.preventDefault();
-    event.stopPropagation();
+    if (document.activeElement.id != "stream_url") {
+        set_key(event, 1);
+        event.preventDefault();
+        event.stopPropagation();
+    }
 }
 
 
@@ -138,9 +143,25 @@ window.onresize = function (event: UIEvent) {
 
 function resize_video() {
     let img: HTMLImageElement = document.getElementById("video") as HTMLImageElement;
-    img.width = window.innerWidth - 10;
-    img.height = window.innerHeight - 20;
+    img.width = window.innerWidth - 25;
+    img.height = window.innerHeight - 45;
 }
+
+let stream_url_input = document.getElementById("stream_url") as HTMLInputElement;
+
+stream_url_input.addEventListener("change", function (event: Event) {
+    let img: HTMLImageElement = document.getElementById("video") as HTMLImageElement;
+    let stream_url_input = event.target as HTMLInputElement;
+    img.src = stream_url_input.value;
+    localStorage.setItem('stream_url', JSON.stringify(stream_url_input.value));
+});
+
+if ('stream_url' in localStorage) {
+    stream_url_input.value = JSON.parse(localStorage.getItem('stream_url'));
+    let img: HTMLImageElement = document.getElementById("video") as HTMLImageElement;
+    img.src = stream_url_input.value;
+}
+
 
 resize_video();
 
