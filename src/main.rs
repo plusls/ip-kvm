@@ -16,6 +16,7 @@ use axum::http::uri::Uri;
 use axum::response::Response;
 use hyper::{Body, client::HttpConnector};
 use once_cell::sync::OnceCell;
+use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinSet;
 use tower_http::{
     services::ServeDir,
@@ -24,6 +25,7 @@ use tower_http::{
 use util::error;
 use util::error::ErrorKind;
 
+use ctrlc;
 use usb_otg::{Configurable, GadgetInfo, hid, UsbConfiguration};
 
 mod keyboard;
@@ -34,15 +36,8 @@ const CONFIGFS_BASE: &str = "/sys/kernel/config/usb_gadget";
 
 
 struct DeviceCtx {
-    configfs_base: String,
     keyboard_device: hid::keyboard::KeyboardDevice,
     mouse_device: hid::mouse::MouseDevice,
-}
-
-impl Drop for DeviceCtx {
-    fn drop(&mut self) {
-        GadgetInfo::cleanup(&self.configfs_base).unwrap();
-    }
 }
 
 
@@ -95,7 +90,7 @@ impl DeviceCtx {
 
         gadget_info.bcd_usb = 0x210;  // USB 2.1
 
-        let usb_gadget_path = format!("{CONFIGFS_BASE}/ip-kvm");
+        let usb_gadget_path = format!("{configfs_base}/ip-kvm");
         GadgetInfo::cleanup(&usb_gadget_path)?;
         gadget_info.apply_config(&usb_gadget_path)?;
 
@@ -117,7 +112,6 @@ impl DeviceCtx {
         let keyboard_device = hid::keyboard::KeyboardDevice::new(keyboard_minor, keyboard_legacy_minor).await?;
         let mouse_device = hid::mouse::MouseDevice::new(mouse_minor, mouse_legacy_minor).await?;
         DEVICE_CTX_INSTANCE.set(Arc::new(Self {
-            configfs_base: configfs_base.into(),
             keyboard_device,
             mouse_device,
         })).unwrap_or(());
@@ -128,12 +122,30 @@ impl DeviceCtx {
 
 #[tokio::main]
 async fn main() -> error::Result<()> {
-    DeviceCtx::init(CONFIGFS_BASE).await?;
     let mut join_set = JoinSet::new();
+    let (tx, mut rx) = unbounded_channel();
+
+    ctrlc::set_handler(move || tx.send(()).expect("Could not send signal on channel."))
+        .expect("Error setting Ctrl-C handler");
+
+    join_set.spawn(async move {
+        rx.recv().await.unwrap();
+        println!("Recv Ctrl-c...");
+    });
+
+    DeviceCtx::init(CONFIGFS_BASE).await.unwrap();
     {
         let keyboard_device = &DEVICE_CTX_INSTANCE.get().unwrap().keyboard_device;
-        join_set.spawn(keyboard_device.recv_loop());
-        join_set.spawn(keyboard_device.recv_legacy_loop());
+        // join_set.spawn(keyboard_device.recv_loop());
+
+        join_set.spawn(async {
+            loop {
+                println!("try recv");
+                let res = keyboard_device.recv().await;
+                println!("recv end, {res:#?}");
+            }
+        });
+        // join_set.spawn(keyboard_device.recv_legacy_loop());
     }
 
     let assets_dir = PathBuf::from("ip-kvm-assets");
@@ -155,11 +167,19 @@ async fn main() -> error::Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     let server = Server::bind(&addr)
         .serve(app.into_make_service_with_connect_info::<SocketAddr>());
-    // .serve(app.into_make_service());
 
     join_set.spawn(async { server.await.unwrap() });
 
-    while let Some(_) = join_set.join_next().await {}
+    let _ = join_set.join_next().await.unwrap();
+    println!("Now shutdown ip-kvm...");
+    // join_set.shutdown().await;
+    join_set.abort_all();
+    while !join_set.is_empty() {
+        let res = join_set.join_next().await;
+        println!("res: {res:?})");
+    }
+    // GadgetInfo::cleanup(&format!("{CONFIGFS_BASE}/ip-kvm"))?;
+    println!("GadgetInfo cleanup success.");
     Ok(())
 }
 
@@ -180,3 +200,4 @@ async fn stream_handler(State(client): State<Client>, mut req: Request<Body>) ->
 
     client.request(req).await.unwrap()
 }
+

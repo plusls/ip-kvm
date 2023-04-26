@@ -502,14 +502,16 @@ impl KeyboardDevice {
 
     pub async fn recv(&self) -> error::Result<()> {
         let mut led_buf = [0_u8; 0x20];
+        println!("start keyboard_dev_read get lock");
         let mut keyboard_dev_read = self.keyboard_dev_read.lock().await;
+        println!("start read");
         let read_len = keyboard_dev_read.read(&mut led_buf).await
             .map_err(|err| error::ErrorKind::fs(err, "keyboard_dev"))?;
+        println!("keyboard_dev: {led_buf:?}");
         if read_len != 0x20 {
             println!("keyboard_dev ignore: {:?}", &led_buf[..read_len]);
             return Ok(());
         }
-        println!("keyboard_dev: {led_buf:?}");
         let mut keyboard = self.keyboard.lock().await;
         keyboard.led.copy_from_slice(&led_buf);
         self.keyboard_update_sender.send_if_modified(|keyboard_state| {
@@ -527,13 +529,16 @@ impl KeyboardDevice {
 
     pub async fn recv_loop(&self) {
         loop {
-            let _ = self.recv().await.unwrap();
+            println!("try recv");
+            let res = self.recv().await;
+            println!("recv end, {res:#?}");
         }
+        println!("stop and exit");
     }
 
     pub async fn recv_legacy_loop(&self) {
         loop {
-            let _ = self.recv_legacy().await.unwrap();
+            self.recv_legacy().await.unwrap();
         }
     }
 
