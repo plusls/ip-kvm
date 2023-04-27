@@ -1,9 +1,13 @@
+use std::os::fd::AsRawFd;
+
 use lazy_static::lazy_static;
-use tokio::fs::{File, OpenOptions};
+use nix::fcntl;
+use nix::sys::stat::Mode;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use util::error;
 
+use crate::async_fd::AsyncFd;
 use crate::hid;
 
 lazy_static! {
@@ -180,8 +184,8 @@ impl Mouse {
 
 pub struct MouseDevice {
     pub mouse: Mutex<Mouse>,
-    mouse_dev_write: Mutex<File>,
-    mouse_legacy_dev_write: Mutex<File>,
+    mouse_dev_write: Mutex<AsyncFd>,
+    mouse_legacy_dev_write: Mutex<AsyncFd>,
 }
 
 impl MouseDevice {
@@ -189,13 +193,15 @@ impl MouseDevice {
         let mouse_dev_name = format!("/dev/hidg{mouse_minor}");
         let mouse_legacy_dev_name = format!("/dev/hidg{mouse_legacy_minor}");
 
-        let mouse_dev_write = OpenOptions::new().write(true)
-            .open(&mouse_dev_name).await
-            .map_err(|err| error::ErrorKind::fs(err, &mouse_dev_name))?;
+        let mouse_dev_write =
+            AsyncFd::try_from(fcntl::open(mouse_dev_name.as_str(), fcntl::OFlag::O_WRONLY, Mode::empty())
+                .map_err(|err| error::ErrorKind::fs(err.into(), &mouse_dev_name))?
+            ).unwrap();
 
-        let mouse_legacy_dev_write = OpenOptions::new().write(true)
-            .open(&mouse_legacy_dev_name).await
-            .map_err(|err| error::ErrorKind::fs(err, &mouse_legacy_dev_name))?;
+        let mouse_legacy_dev_write =
+            AsyncFd::try_from(fcntl::open(mouse_legacy_dev_name.as_str(), fcntl::OFlag::O_WRONLY, Mode::empty())
+                .map_err(|err| error::ErrorKind::fs(err.into(), &mouse_legacy_dev_name))?
+            ).unwrap();
 
         let ret = Self {
             mouse: Default::default(),
@@ -214,21 +220,17 @@ impl MouseDevice {
     pub async fn send(&self, x: u16, y: u16, wheel: i8) -> error::Result<()> {
         let mut mouse_dev_write = self.mouse_dev_write.lock().await;
         let payload = self.mouse.lock().await.get_payload(x, y, wheel);
-        println!("send {payload:?}");
+        println!("mouse send {payload:?} {}", mouse_dev_write.as_raw_fd());
         mouse_dev_write.write_all(&payload).await
             .map_err(|err| error::ErrorKind::fs(err, "mouse_dev write_all"))?;
-        mouse_dev_write.flush().await
-            .map_err(|err| error::ErrorKind::fs(err, "mouse_dev flush"))?;
         Ok(())
     }
     pub async fn send_legacy(&self, x: i8, y: i8, wheel: i8) -> error::Result<()> {
         let mut mouse_legacy_dev = self.mouse_legacy_dev_write.lock().await;
         let payload = self.mouse.lock().await.get_legacy_payload(x, y, wheel);
-        println!("send_legacy {payload:?}");
+        println!("mouse send_legacy {payload:?}");
         mouse_legacy_dev.write_all(&payload).await
             .map_err(|err| error::ErrorKind::fs(err, "mouse_legacy_dev write_all"))?;
-        mouse_legacy_dev.flush().await
-            .map_err(|err| error::ErrorKind::fs(err, "mouse_legacy_dev flush"))?;
         Ok(())
     }
 }

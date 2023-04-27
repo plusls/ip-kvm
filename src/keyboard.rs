@@ -1,16 +1,24 @@
-use std::net::SocketAddr;
-use std::ops::ControlFlow;
-use std::sync::Arc;
+use std::{net::SocketAddr,
+          ops::ControlFlow,
+          sync::Arc,
+          time::Duration};
 
-use axum::{headers, TypedHeader};
-use axum::extract::{ConnectInfo, WebSocketUpgrade};
-use axum::extract::ws::{Message, WebSocket};
-use axum::response::IntoResponse;
+use axum::{
+    extract::{
+        ConnectInfo,
+        WebSocketUpgrade,
+        ws::{Message, WebSocket},
+    },
+    headers,
+    response::IntoResponse,
+    TypedHeader,
+};
 use futures::{SinkExt, StreamExt};
-use tokio::sync::Mutex;
-use tokio::task::JoinSet;
+use tokio::{sync::Mutex,
+            task::JoinSet,
+            time};
 
-use crate::DeviceCtx;
+use crate::DEVICE_CTX_INSTANCE;
 
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -33,14 +41,22 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
 
     join_set.spawn(async move {
         let sender = Arc::new(Mutex::new(sender));
-        let device_ctx = DeviceCtx::instance();
-        let keyboard_receiver = Arc::new(Mutex::new(device_ctx.keyboard_device.keyboard_update_sender.subscribe()));
+
+        let device_ctx = DEVICE_CTX_INSTANCE.read().await;
+        let keyboard_device = if let Some(device_ctx) = device_ctx.as_ref() {
+            &device_ctx.keyboard_device
+        } else {
+            return;
+        };
+        let keyboard_receiver = Arc::new(Mutex::new(keyboard_device.keyboard_update_sender.subscribe()));
+        drop(device_ctx);
+
         loop {
             let timeout_sender = sender.clone();
 
             let mut join_set = JoinSet::new();
             join_set.spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                tokio::time::sleep(Duration::from_millis(1000)).await;
                 if timeout_sender.lock().await.send(Message::Ping(vec![1, 2, 3])).await.is_ok() {
                     ControlFlow::Continue(())
                 } else {
@@ -88,10 +104,44 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
     println!("Websocket context {} destroyed", who);
 }
 
+async fn send_keyboard_update() -> ControlFlow<(), ()> {
+    let mut join_set = JoinSet::new();
+    join_set.spawn(async move {
+        let device_ctx = DEVICE_CTX_INSTANCE.read().await;
+        let keyboard_device = if let Some(device_ctx) = device_ctx.as_ref() {
+            &device_ctx.keyboard_device
+        } else {
+            return ControlFlow::Break(());
+        };
+
+        if let Err(err) = keyboard_device.send().await {
+            eprintln!("keyboard_device.send failed: {err}");
+        }
+        if let Err(err) = keyboard_device.send_legacy().await {
+            eprintln!("keyboard_device.send_legacy failed: {err}");
+        }
+        ControlFlow::Continue(())
+    });
+    join_set.spawn(async {
+        time::sleep(Duration::from_secs(5)).await;
+        eprintln!("keyboard_device send timeout.");
+        ControlFlow::Break(())
+    });
+
+    let ret = join_set.join_next().await.unwrap().unwrap();
+    join_set.shutdown().await;
+    ret
+}
+
 async fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
     match msg {
         Message::Binary(d) => {
-            let keyboard_device = &DeviceCtx::instance().keyboard_device;
+            let device_ctx = DEVICE_CTX_INSTANCE.read().await;
+            let keyboard_device = if let Some(device_ctx) = device_ctx.as_ref() {
+                &device_ctx.keyboard_device
+            } else {
+                return ControlFlow::Break(());
+            };
             if d.len() != 3 || (d[0] != 0 && d[0] != 1) {
                 return ControlFlow::Break(());
             } else if d[0] == 0 {
@@ -99,20 +149,17 @@ async fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
                     return ControlFlow::Break(());
                 }
                 if keyboard_device.set_key(d[1] as u16, d[2] == 1).await {
-                    let _ = keyboard_device.send().await;
-                    let _ = keyboard_device.send_legacy().await;
+                    return send_keyboard_update().await;
                 }
             } else {
                 if d[2] != 0 || d[2] != 1 {
                     return ControlFlow::Break(());
                 }
                 if keyboard_device.set_sys_control_key(d[1] as u16, d[2] == 1).await {
-                    let _ = keyboard_device.send().await;
-                    let _ = keyboard_device.send_legacy().await;
+                    return send_keyboard_update().await;
                 }
             }
-
-            println!(">>> {} sent {} bytes: {:?}", who, d.len(), d);
+            ControlFlow::Continue(())
         }
         Message::Close(c) => {
             if let Some(cf) = c {
@@ -123,9 +170,10 @@ async fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
             } else {
                 println!(">>> {} somehow sent close message without CloseFrame", who);
             }
-            return ControlFlow::Break(());
+            ControlFlow::Break(())
         }
-        _ => {}
+        _ => {
+            ControlFlow::Continue(())
+        }
     }
-    ControlFlow::Continue(())
 }

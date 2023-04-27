@@ -10,7 +10,7 @@ use tokio::task::JoinSet;
 
 use usb_otg::hid::mouse::Mouse;
 
-use crate::DeviceCtx;
+use crate::DEVICE_CTX_INSTANCE;
 
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -58,8 +58,6 @@ async fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
     match msg {
         Message::Binary(d) => {
             println!(">>> {} sent {} bytes: {:?}", who, d.len(), d);
-
-            let mouse_device = &DeviceCtx::instance().mouse_device;
             // 6 byte
             // button -> 1
             // X -> 2
@@ -84,6 +82,12 @@ async fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
             if wheel == -128 {
                 return ControlFlow::Break(());
             }
+            let device_ctx = DEVICE_CTX_INSTANCE.read().await;
+            let mouse_device = if let Some(device_ctx) = device_ctx.as_ref() {
+                &device_ctx.mouse_device
+            } else {
+                return ControlFlow::Break(());
+            };
             mouse_device.mouse.lock().await.button = d[0];
             println!("x: {x}, y: {y}");
             let _ = mouse_device.send(x, y, wheel).await;

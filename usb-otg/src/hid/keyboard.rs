@@ -1,10 +1,12 @@
 use lazy_static::lazy_static;
-use tokio::fs::{File, OpenOptions};
+use nix::fcntl;
+use nix::sys::stat::Mode;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tokio::sync::watch::Sender;
 use util::error;
 
+use crate::async_fd::AsyncFd;
 use crate::hid;
 use crate::hid::generic_desktop;
 
@@ -276,7 +278,7 @@ lazy_static! {
         no_out_endpoint: 1,
         subclass: 1, /* Boot Interface SubClass */
         protocol: 1,  /* Keyboard */
-        report_length: 0x20,
+        report_length: 0x22,
         report_desc: vec![
             // Keyboard
             0x05, 0x01,     /* USAGE_PAGE (Generic Desktop)           */
@@ -427,33 +429,39 @@ impl Keyboard {
 
 pub struct KeyboardDevice {
     pub keyboard: Mutex<Keyboard>,
-    keyboard_dev_read: Mutex<File>,
-    keyboard_dev_write: Mutex<File>,
-    keyboard_legacy_dev_read: Mutex<File>,
-    keyboard_legacy_dev_write: Mutex<File>,
+    keyboard_dev_read: Mutex<AsyncFd>,
+    keyboard_dev_write: Mutex<AsyncFd>,
+    keyboard_legacy_dev_read: Mutex<AsyncFd>,
+    keyboard_legacy_dev_write: Mutex<AsyncFd>,
     pub keyboard_update_sender: Sender<[u8; 0x20]>,
 }
 
 impl KeyboardDevice {
+    // AsyncFd::new must call in tokio async runtime
     pub async fn new(keyboard_minor: i32, keyboard_legacy_minor: i32) -> error::Result<Self> {
         let keyboard_dev_name = format!("/dev/hidg{keyboard_minor}");
         let keyboard_legacy_dev_name = format!("/dev/hidg{keyboard_legacy_minor}");
 
-        let keyboard_dev_read = OpenOptions::new().read(true)
-            .open(&keyboard_dev_name).await
-            .map_err(|err| error::ErrorKind::fs(err, &keyboard_dev_name))?;
+        let keyboard_dev_read =
+            AsyncFd::try_from(fcntl::open(keyboard_dev_name.as_str(), fcntl::OFlag::O_RDONLY, Mode::empty())
+                .map_err(|err| error::ErrorKind::fs(err.into(), &keyboard_dev_name))?
+            ).unwrap();
 
-        let keyboard_dev_write = OpenOptions::new().write(true)
-            .open(&keyboard_dev_name).await
-            .map_err(|err| error::ErrorKind::fs(err, &keyboard_dev_name))?;
+        let keyboard_dev_write =
+            AsyncFd::try_from(fcntl::open(keyboard_dev_name.as_str(), fcntl::OFlag::O_WRONLY, Mode::empty())
+                .map_err(|err| error::ErrorKind::fs(err.into(), &keyboard_dev_name))?
+            ).unwrap();
 
-        let keyboard_legacy_dev_read = OpenOptions::new().read(true)
-            .open(&keyboard_legacy_dev_name).await
-            .map_err(|err| error::ErrorKind::fs(err, &keyboard_legacy_dev_name))?;
+        let keyboard_legacy_dev_read =
+            AsyncFd::try_from(fcntl::open(keyboard_legacy_dev_name.as_str(), fcntl::OFlag::O_RDONLY, Mode::empty())
+                .map_err(|err| error::ErrorKind::fs(err.into(), &keyboard_legacy_dev_name))?
+            ).unwrap();
 
-        let keyboard_legacy_dev_write = OpenOptions::new().write(true)
-            .open(&keyboard_legacy_dev_name).await
-            .map_err(|err| error::ErrorKind::fs(err, &keyboard_legacy_dev_name))?;
+
+        let keyboard_legacy_dev_write =
+            AsyncFd::try_from(fcntl::open(keyboard_legacy_dev_name.as_str(), fcntl::OFlag::O_WRONLY, Mode::empty())
+                .map_err(|err| error::ErrorKind::fs(err.into(), &keyboard_legacy_dev_name))?
+            ).unwrap();
 
         let (sender, _) = tokio::sync::watch::channel([0; 0x20]);
         let ret = Self {
@@ -495,23 +503,19 @@ impl KeyboardDevice {
                 false
             }
         });
-
         Ok(())
     }
 
-
     pub async fn recv(&self) -> error::Result<()> {
         let mut led_buf = [0_u8; 0x20];
-        println!("start keyboard_dev_read get lock");
         let mut keyboard_dev_read = self.keyboard_dev_read.lock().await;
-        println!("start read");
         let read_len = keyboard_dev_read.read(&mut led_buf).await
             .map_err(|err| error::ErrorKind::fs(err, "keyboard_dev"))?;
-        println!("keyboard_dev: {led_buf:?}");
         if read_len != 0x20 {
             println!("keyboard_dev ignore: {:?}", &led_buf[..read_len]);
             return Ok(());
         }
+        println!("keyboard_dev: {led_buf:?}");
         let mut keyboard = self.keyboard.lock().await;
         keyboard.led.copy_from_slice(&led_buf);
         self.keyboard_update_sender.send_if_modified(|keyboard_state| {
@@ -527,29 +531,12 @@ impl KeyboardDevice {
         Ok(())
     }
 
-    pub async fn recv_loop(&self) {
-        loop {
-            println!("try recv");
-            let res = self.recv().await;
-            println!("recv end, {res:#?}");
-        }
-        println!("stop and exit");
-    }
-
-    pub async fn recv_legacy_loop(&self) {
-        loop {
-            self.recv_legacy().await.unwrap();
-        }
-    }
-
     pub async fn send(&self) -> error::Result<()> {
         let mut keyboard_dev = self.keyboard_dev_write.lock().await;
         let payload = self.keyboard.lock().await.get_payload();
         println!("send {payload:?}");
         keyboard_dev.write_all(&payload).await
-            .map_err(|err| error::ErrorKind::fs(err, "keyboard_dev write_all"))?;
-        keyboard_dev.flush().await
-            .map_err(|err| error::ErrorKind::fs(err, "keyboard_dev flush"))?;
+            .map_err(|err| error::ErrorKind::fs(err, "keyboard_dev"))?;
         Ok(())
     }
     pub async fn send_legacy(&self) -> error::Result<()> {
@@ -557,9 +544,7 @@ impl KeyboardDevice {
         let payload = self.keyboard.lock().await.get_legacy_payload();
         println!("send_legacy {payload:?}");
         keyboard_legacy_dev.write_all(&payload).await
-            .map_err(|err| error::ErrorKind::fs(err, "keyboard_legacy_dev write_all"))?;
-        keyboard_legacy_dev.flush().await
-            .map_err(|err| error::ErrorKind::fs(err, "keyboard_legacy_dev flush"))?;
+            .map_err(|err| error::ErrorKind::fs(err, "keyboard_legacy_dev"))?;
         Ok(())
     }
 }

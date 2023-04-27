@@ -1,31 +1,33 @@
 #![feature(trait_upcasting)]
 
-use std::any::Any;
-use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{any::Any,
+          net::SocketAddr,
+          path::PathBuf,
+          time::Duration,
+};
 
 use axum::{
+    extract::State,
+    http::{Request, uri::Uri},
+    response::Response,
     Router,
     routing,
     Server,
 };
-use axum::extract::State;
-use axum::http::Request;
-use axum::http::uri::Uri;
-use axum::response::Response;
 use hyper::{Body, client::HttpConnector};
-use once_cell::sync::OnceCell;
-use tokio::sync::mpsc::unbounded_channel;
-use tokio::task::JoinSet;
+use once_cell::sync::Lazy;
+use tokio::{main,
+            signal,
+            sync::RwLock,
+            task::JoinSet,
+            time,
+};
 use tower_http::{
     services::ServeDir,
     trace::{DefaultMakeSpan, TraceLayer},
 };
 use util::error;
-use util::error::ErrorKind;
 
-use ctrlc;
 use usb_otg::{Configurable, GadgetInfo, hid, UsbConfiguration};
 
 mod keyboard;
@@ -35,22 +37,17 @@ mod mouse_legacy;
 const CONFIGFS_BASE: &str = "/sys/kernel/config/usb_gadget";
 
 
-struct DeviceCtx {
+pub struct DeviceCtx {
     keyboard_device: hid::keyboard::KeyboardDevice,
     mouse_device: hid::mouse::MouseDevice,
 }
 
 
-static DEVICE_CTX_INSTANCE: OnceCell<Arc<DeviceCtx>> = OnceCell::new();
+pub static DEVICE_CTX_INSTANCE: Lazy<RwLock<Option<DeviceCtx>>> = Lazy::new(|| RwLock::new(None));
 
 const UDC_PATH: &str = "/sys/class/udc";
 
 impl DeviceCtx {
-    pub fn instance() -> Arc<Self> {
-        // 肯定不会是空，必然是在 DEVICE_CTX 初始化后才走到这
-        return DEVICE_CTX_INSTANCE.get().unwrap().clone();
-    }
-
     pub async fn init(configfs_base: &str) -> error::Result<()> {
         let mut gadget_info: GadgetInfo = Default::default();
         gadget_info.functions.insert("hid.usb0".into(), Box::new(usb_otg::hid::keyboard::KEYBOARD_LEGACY_FHO.clone()));
@@ -71,7 +68,7 @@ impl DeviceCtx {
 
         let mut udc_name = None;
         for entry in util::fs::read_dir(UDC_PATH)? {
-            let entry = entry.map_err(|err| ErrorKind::fs(err, UDC_PATH))?;
+            let entry = entry.map_err(|err| error::ErrorKind::fs(err, UDC_PATH))?;
             let path = entry.path();
             if let Some(path_file_name) = path.file_name() {
                 if let Some(path_file_name) = path_file_name.to_str() {
@@ -84,7 +81,7 @@ impl DeviceCtx {
         if let Some(udc_name) = udc_name {
             gadget_info.udc = udc_name;
         } else {
-            Err(ErrorKind::custom("Can not found udc".into()))?;
+            Err(error::ErrorKind::custom("Can not found udc".into()))?;
         }
 
 
@@ -109,44 +106,48 @@ impl DeviceCtx {
         println!("keyboard_legacy_minor: {keyboard_legacy_minor} keyboard_minor: {keyboard_minor}");
         println!("mouse_legacy_minor: {mouse_legacy_minor} mouse_minor: {mouse_minor}");
 
+        let hid_path_list: Vec<_> =
+            [keyboard_legacy_minor, keyboard_minor, mouse_legacy_minor, mouse_minor].iter()
+                .map(|hid_id| std::path::Path::new(&format!("/dev/hidg{hid_id}")).to_path_buf()).collect();
+
+        // 等待 hidg 设备创建完毕
+        while hid_path_list.iter().any(|hid_path| !hid_path.exists()) {
+            time::sleep(Duration::from_millis(500)).await;
+        }
+
+
         let keyboard_device = hid::keyboard::KeyboardDevice::new(keyboard_minor, keyboard_legacy_minor).await?;
         let mouse_device = hid::mouse::MouseDevice::new(mouse_minor, mouse_legacy_minor).await?;
-        DEVICE_CTX_INSTANCE.set(Arc::new(Self {
+        *DEVICE_CTX_INSTANCE.write().await = Some(Self {
             keyboard_device,
             mouse_device,
-        })).unwrap_or(());
+        });
 
         Ok(())
     }
 }
 
-#[tokio::main]
+#[main]
 async fn main() -> error::Result<()> {
     let mut join_set = JoinSet::new();
-    let (tx, mut rx) = unbounded_channel();
-
-    ctrlc::set_handler(move || tx.send(()).expect("Could not send signal on channel."))
-        .expect("Error setting Ctrl-C handler");
-
-    join_set.spawn(async move {
-        rx.recv().await.unwrap();
-        println!("Recv Ctrl-c...");
-    });
 
     DeviceCtx::init(CONFIGFS_BASE).await.unwrap();
-    {
-        let keyboard_device = &DEVICE_CTX_INSTANCE.get().unwrap().keyboard_device;
-        // join_set.spawn(keyboard_device.recv_loop());
 
-        join_set.spawn(async {
-            loop {
-                println!("try recv");
-                let res = keyboard_device.recv().await;
-                println!("recv end, {res:#?}");
-            }
-        });
-        // join_set.spawn(keyboard_device.recv_legacy_loop());
-    }
+    join_set.spawn(async {
+        let device_ctx = DEVICE_CTX_INSTANCE.read().await;
+        let keyboard_device = &device_ctx.as_ref().unwrap().keyboard_device;
+        loop {
+            keyboard_device.recv().await.unwrap();
+        }
+    });
+
+    join_set.spawn(async {
+        let device_ctx = DEVICE_CTX_INSTANCE.read().await;
+        let keyboard_device = &device_ctx.as_ref().unwrap().keyboard_device;
+        loop {
+            keyboard_device.recv_legacy().await.unwrap();
+        }
+    });
 
     let assets_dir = PathBuf::from("ip-kvm-assets");
     let client = Client::new();
@@ -170,15 +171,22 @@ async fn main() -> error::Result<()> {
 
     join_set.spawn(async { server.await.unwrap() });
 
-    let _ = join_set.join_next().await.unwrap();
-    println!("Now shutdown ip-kvm...");
-    // join_set.shutdown().await;
-    join_set.abort_all();
-    while !join_set.is_empty() {
-        let res = join_set.join_next().await;
-        println!("res: {res:?})");
+
+    match signal::ctrl_c().await {
+        Ok(()) => {}
+        Err(err) => {
+            eprintln!("Unable to listen for shutdown signal: {}", err);
+        }
     }
-    // GadgetInfo::cleanup(&format!("{CONFIGFS_BASE}/ip-kvm"))?;
+    println!("Now shutdown ip-kvm...");
+
+    join_set.shutdown().await;
+
+    println!("Wait DEVICE_CTX_INSTANCE write lock.");
+    *DEVICE_CTX_INSTANCE.write().await = None;
+    println!("Drop device ctx success!");
+
+    GadgetInfo::cleanup(&format!("{CONFIGFS_BASE}/ip-kvm"))?;
     println!("GadgetInfo cleanup success.");
     Ok(())
 }

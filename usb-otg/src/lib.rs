@@ -6,6 +6,7 @@ use std::path::Path;
 use util::{error, fs};
 
 pub mod hid;
+pub mod async_fd;
 
 pub enum UsbDeviceSpeed {
     // enumerating

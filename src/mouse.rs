@@ -1,16 +1,25 @@
-use std::net::SocketAddr;
-use std::ops::ControlFlow;
+use std::{net::SocketAddr,
+          ops::ControlFlow,
+          time::Duration};
 
-use axum::{headers, TypedHeader};
-use axum::extract::{ConnectInfo, WebSocketUpgrade};
-use axum::extract::ws::{Message, WebSocket};
-use axum::response::IntoResponse;
+use axum::{
+    extract::{
+        ConnectInfo,
+        WebSocketUpgrade,
+        ws::{Message, WebSocket},
+    },
+    headers,
+    response::IntoResponse,
+    TypedHeader,
+};
 use futures::{SinkExt, StreamExt};
-use tokio::task::JoinSet;
+use tokio::{
+    task::JoinSet,
+    time};
 
 use usb_otg::hid::mouse::Mouse;
 
-use crate::DeviceCtx;
+use crate::DEVICE_CTX_INSTANCE;
 
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -57,9 +66,6 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
 async fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
     match msg {
         Message::Binary(d) => {
-            println!(">>> {} sent {} bytes: {:?}", who, d.len(), d);
-
-            let mouse_device = &DeviceCtx::instance().mouse_device;
             // 6 byte
             // button -> 1
             // X -> 2
@@ -84,9 +90,37 @@ async fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
             if wheel == -128 {
                 return ControlFlow::Break(());
             }
+            let device_ctx = DEVICE_CTX_INSTANCE.read().await;
+            let mouse_device = if let Some(device_ctx) = device_ctx.as_ref() {
+                &device_ctx.mouse_device
+            } else {
+                return ControlFlow::Break(());
+            };
+
             mouse_device.mouse.lock().await.button = d[0];
-            println!("x: {x}, y: {y}");
-            let _ = mouse_device.send(x, y, wheel).await;
+            drop(device_ctx);
+            let mut join_set = JoinSet::new();
+            join_set.spawn(async move {
+                let device_ctx = DEVICE_CTX_INSTANCE.read().await;
+                let mouse_device = if let Some(device_ctx) = device_ctx.as_ref() {
+                    &device_ctx.mouse_device
+                } else {
+                    return ControlFlow::Break(());
+                };
+                if let Err(err) = mouse_device.send(x, y, wheel).await {
+                    eprintln!("mouse_device.send failed: {err}");
+                }
+                ControlFlow::Continue(())
+            });
+            join_set.spawn(async {
+                time::sleep(Duration::from_secs(5)).await;
+                eprintln!("mouse_device send timeout.");
+                ControlFlow::Break(())
+            });
+
+            let ret = join_set.join_next().await.unwrap().unwrap();
+            join_set.shutdown().await;
+            ret
         }
         Message::Close(c) => {
             if let Some(cf) = c {
@@ -97,9 +131,10 @@ async fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
             } else {
                 println!(">>> {} somehow sent close message without CloseFrame", who);
             }
-            return ControlFlow::Break(());
+            ControlFlow::Break(())
         }
-        _ => {}
+        _ => {
+            ControlFlow::Continue(())
+        }
     }
-    ControlFlow::Continue(())
 }
