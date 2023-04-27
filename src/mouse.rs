@@ -1,8 +1,12 @@
-use std::{net::SocketAddr,
-          ops::ControlFlow,
-          time::Duration};
+use std::{
+    net::SocketAddr,
+    ops::ControlFlow,
+    sync::Arc,
+    time::Duration,
+};
 
 use axum::{
+    Extension,
     extract::{
         ConnectInfo,
         WebSocketUpgrade,
@@ -14,17 +18,19 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use tokio::{
+    sync::RwLock,
     task::JoinSet,
     time};
 
 use usb_otg::hid::mouse::Mouse;
 
-use crate::DEVICE_CTX_INSTANCE;
+use crate::DeviceCtx;
 
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     user_agent: Option<TypedHeader<headers::UserAgent>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Extension(device_ctx): Extension<Arc<RwLock<DeviceCtx>>>,
 ) -> impl IntoResponse {
     let user_agent = if let Some(TypedHeader(user_agent)) = user_agent {
         user_agent.to_string()
@@ -32,17 +38,17 @@ pub async fn ws_handler(
         String::from("Unknown browser")
     };
     println!("`{user_agent}` at {addr} connected.");
-    ws.on_upgrade(move |socket| handle_socket(socket, addr))
+    ws.on_upgrade(move |socket| handle_socket(device_ctx, socket, addr))
 }
 
-async fn handle_socket(socket: WebSocket, who: SocketAddr) {
+async fn handle_socket(device_ctx: Arc<RwLock<DeviceCtx>>, socket: WebSocket, who: SocketAddr) {
     let (mut sender, mut receiver) = socket.split();
 
     let mut join_set = JoinSet::new();
 
     join_set.spawn(async move {
         loop {
-            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+            tokio::time::sleep(Duration::from_millis(1000)).await;
             if sender.send(Message::Ping(vec![1, 2, 3])).await.is_err() {
                 break;
             }
@@ -51,7 +57,7 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
 
     join_set.spawn(async move {
         while let Some(Ok(msg)) = receiver.next().await {
-            if process_message(msg, who).await.is_break() {
+            if process_message(device_ctx.clone(), msg, who).await.is_break() {
                 break;
             }
         }
@@ -63,7 +69,7 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
     println!("Websocket context {} destroyed", who);
 }
 
-async fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
+async fn process_message(device_ctx: Arc<RwLock<DeviceCtx>>, msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
     match msg {
         Message::Binary(d) => {
             // 6 byte
@@ -90,23 +96,12 @@ async fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
             if wheel == -128 {
                 return ControlFlow::Break(());
             }
-            let device_ctx = DEVICE_CTX_INSTANCE.read().await;
-            let mouse_device = if let Some(device_ctx) = device_ctx.as_ref() {
-                &device_ctx.mouse_device
-            } else {
-                return ControlFlow::Break(());
-            };
-
+            let mouse_device = &device_ctx.read().await.mouse_device;
             mouse_device.mouse.lock().await.button = d[0];
-            drop(device_ctx);
             let mut join_set = JoinSet::new();
+            let device_ctx_send = device_ctx.clone();
             join_set.spawn(async move {
-                let device_ctx = DEVICE_CTX_INSTANCE.read().await;
-                let mouse_device = if let Some(device_ctx) = device_ctx.as_ref() {
-                    &device_ctx.mouse_device
-                } else {
-                    return ControlFlow::Break(());
-                };
+                let mouse_device = &device_ctx_send.read().await.mouse_device;
                 if let Err(err) = mouse_device.send(x, y, wheel).await {
                     eprintln!("mouse_device.send failed: {err}");
                 }

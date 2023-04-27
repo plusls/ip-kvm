@@ -1,9 +1,12 @@
-use std::{net::SocketAddr,
-          ops::ControlFlow,
-          sync::Arc,
-          time::Duration};
+use std::{
+    net::SocketAddr,
+    ops::ControlFlow,
+    sync::Arc,
+    time::Duration,
+};
 
 use axum::{
+    Extension,
     extract::{
         ConnectInfo,
         WebSocketUpgrade,
@@ -14,16 +17,19 @@ use axum::{
     TypedHeader,
 };
 use futures::{SinkExt, StreamExt};
-use tokio::{sync::Mutex,
-            task::JoinSet,
-            time};
+use tokio::{
+    sync::{Mutex, RwLock},
+    task::JoinSet,
+    time,
+};
 
-use crate::DEVICE_CTX_INSTANCE;
+use crate::DeviceCtx;
 
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     user_agent: Option<TypedHeader<headers::UserAgent>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Extension(device_ctx): Extension<Arc<RwLock<DeviceCtx>>>,
 ) -> impl IntoResponse {
     let user_agent = if let Some(TypedHeader(user_agent)) = user_agent {
         user_agent.to_string()
@@ -31,25 +37,19 @@ pub async fn ws_handler(
         String::from("Unknown browser")
     };
     println!("`{user_agent}` at {addr} connected.");
-    ws.on_upgrade(move |socket| handle_socket(socket, addr))
+    ws.on_upgrade(move |socket| handle_socket(device_ctx, socket, addr))
 }
 
-async fn handle_socket(socket: WebSocket, who: SocketAddr) {
+async fn handle_socket(device_ctx: Arc<RwLock<DeviceCtx>>, socket: WebSocket, who: SocketAddr) {
     let (sender, mut receiver) = socket.split();
 
     let mut join_set = JoinSet::new();
-
+    let device_ctx_send = device_ctx.clone();
     join_set.spawn(async move {
         let sender = Arc::new(Mutex::new(sender));
 
-        let device_ctx = DEVICE_CTX_INSTANCE.read().await;
-        let keyboard_device = if let Some(device_ctx) = device_ctx.as_ref() {
-            &device_ctx.keyboard_device
-        } else {
-            return;
-        };
+        let keyboard_device = &device_ctx_send.read().await.keyboard_device;
         let keyboard_receiver = Arc::new(Mutex::new(keyboard_device.keyboard_update_sender.subscribe()));
-        drop(device_ctx);
 
         loop {
             let timeout_sender = sender.clone();
@@ -89,9 +89,10 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
         }
     });
 
+    let device_ctx_recv = device_ctx.clone();
     join_set.spawn(async move {
         while let Some(Ok(msg)) = receiver.next().await {
-            if process_message(msg, who).await.is_break() {
+            if process_message(device_ctx_recv.clone(), msg, who).await.is_break() {
                 break;
             }
         }
@@ -104,15 +105,10 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr) {
     println!("Websocket context {} destroyed", who);
 }
 
-async fn send_keyboard_update() -> ControlFlow<(), ()> {
+async fn send_keyboard_update(device_ctx: Arc<RwLock<DeviceCtx>>) -> ControlFlow<(), ()> {
     let mut join_set = JoinSet::new();
     join_set.spawn(async move {
-        let device_ctx = DEVICE_CTX_INSTANCE.read().await;
-        let keyboard_device = if let Some(device_ctx) = device_ctx.as_ref() {
-            &device_ctx.keyboard_device
-        } else {
-            return ControlFlow::Break(());
-        };
+        let keyboard_device = &device_ctx.read().await.keyboard_device;
 
         if let Err(err) = keyboard_device.send().await {
             eprintln!("keyboard_device.send failed: {err}");
@@ -133,15 +129,10 @@ async fn send_keyboard_update() -> ControlFlow<(), ()> {
     ret
 }
 
-async fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
+async fn process_message(device_ctx: Arc<RwLock<DeviceCtx>>, msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
     match msg {
         Message::Binary(d) => {
-            let device_ctx = DEVICE_CTX_INSTANCE.read().await;
-            let keyboard_device = if let Some(device_ctx) = device_ctx.as_ref() {
-                &device_ctx.keyboard_device
-            } else {
-                return ControlFlow::Break(());
-            };
+            let keyboard_device = &device_ctx.read().await.keyboard_device;
             if d.len() != 3 || (d[0] != 0 && d[0] != 1) {
                 return ControlFlow::Break(());
             } else if d[0] == 0 {
@@ -149,14 +140,14 @@ async fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
                     return ControlFlow::Break(());
                 }
                 if keyboard_device.set_key(d[1] as u16, d[2] == 1).await {
-                    return send_keyboard_update().await;
+                    return send_keyboard_update(device_ctx.clone()).await;
                 }
             } else {
                 if d[2] != 0 || d[2] != 1 {
                     return ControlFlow::Break(());
                 }
                 if keyboard_device.set_sys_control_key(d[1] as u16, d[2] == 1).await {
-                    return send_keyboard_update().await;
+                    return send_keyboard_update(device_ctx.clone()).await;
                 }
             }
             ControlFlow::Continue(())

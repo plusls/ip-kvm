@@ -1,13 +1,10 @@
 #![feature(trait_upcasting)]
 
-use std::{any::Any,
-          net::SocketAddr,
-          path::PathBuf,
-          time::Duration,
-};
+use std::{any::Any, net::SocketAddr, path::PathBuf, time::Duration};
+use std::sync::Arc;
 
 use axum::{
-    extract::State,
+    extract::{Extension, State},
     http::{Request, uri::Uri},
     response::Response,
     Router,
@@ -15,12 +12,12 @@ use axum::{
     Server,
 };
 use hyper::{Body, client::HttpConnector};
-use once_cell::sync::Lazy;
-use tokio::{main,
-            signal,
-            sync::RwLock,
-            task::JoinSet,
-            time,
+use tokio::{
+    main,
+    signal,
+    sync::{Mutex, RwLock},
+    task::JoinSet,
+    time,
 };
 use tower_http::{
     services::ServeDir,
@@ -32,23 +29,23 @@ use usb_otg::{Configurable, GadgetInfo, hid, UsbConfiguration};
 
 mod keyboard;
 mod mouse;
-mod mouse_legacy;
+// mod mouse_legacy;
 
 const CONFIGFS_BASE: &str = "/sys/kernel/config/usb_gadget";
 
 
 pub struct DeviceCtx {
+    usb_gadget_path: String,
     keyboard_device: hid::keyboard::KeyboardDevice,
     mouse_device: hid::mouse::MouseDevice,
+    join_set: Mutex<JoinSet<()>>,
 }
-
-
-pub static DEVICE_CTX_INSTANCE: Lazy<RwLock<Option<DeviceCtx>>> = Lazy::new(|| RwLock::new(None));
 
 const UDC_PATH: &str = "/sys/class/udc";
 
 impl DeviceCtx {
-    pub async fn init(configfs_base: &str) -> error::Result<()> {
+    // RwLock Option 是为了方便析构 DeviceCtx
+    pub async fn new(configfs_base: &str) -> error::Result<Arc<RwLock<Self>>> {
         let mut gadget_info: GadgetInfo = Default::default();
         gadget_info.functions.insert("hid.usb0".into(), Box::new(usb_otg::hid::keyboard::KEYBOARD_LEGACY_FHO.clone()));
         gadget_info.functions.insert("hid.usb1".into(), Box::new(usb_otg::hid::keyboard::KEYBOARD_FHO.clone()));
@@ -118,12 +115,47 @@ impl DeviceCtx {
 
         let keyboard_device = hid::keyboard::KeyboardDevice::new(keyboard_minor, keyboard_legacy_minor).await?;
         let mouse_device = hid::mouse::MouseDevice::new(mouse_minor, mouse_legacy_minor).await?;
-        *DEVICE_CTX_INSTANCE.write().await = Some(Self {
+        let ret = Arc::new(RwLock::new(Self {
+            join_set: Mutex::new(JoinSet::new()),
             keyboard_device,
             mouse_device,
+            usb_gadget_path,
+        }));
+        let device_ctx = ret.write().await;
+        let join_set = &device_ctx.join_set;
+        let ret_recv = ret.clone();
+        join_set.lock().await.spawn(async move {
+            let device_ctx = ret_recv.read().await;
+            let keyboard_device = &device_ctx.keyboard_device;
+            loop {
+                keyboard_device.recv().await.unwrap();
+            }
         });
+        let recv_legacy = ret.clone();
+        join_set.lock().await.spawn(async move {
+            let device_ctx = recv_legacy.read().await;
+            let keyboard_device = &device_ctx.keyboard_device;
+            loop {
+                keyboard_device.recv_legacy().await.unwrap();
+            }
+        });
+        drop(device_ctx);
+        Ok(ret)
+    }
+    pub async fn abort_join_set(&self) {
+        println!("DeviceCtx start shutdown.");
+        self.join_set.lock().await.shutdown().await;
+        println!("DeviceCtx shutdown success.");
+    }
+}
 
-        Ok(())
+impl Drop for DeviceCtx {
+    fn drop(&mut self) {
+        if let Err(err) = GadgetInfo::cleanup(&self.usb_gadget_path) {
+            eprintln!("GadgetInfo cleanup failed: {err}");
+        } else {
+            println!("GadgetInfo cleanup success.");
+        }
     }
 }
 
@@ -131,22 +163,12 @@ impl DeviceCtx {
 async fn main() -> error::Result<()> {
     let mut join_set = JoinSet::new();
 
-    DeviceCtx::init(CONFIGFS_BASE).await.unwrap();
-
-    join_set.spawn(async {
-        let device_ctx = DEVICE_CTX_INSTANCE.read().await;
-        let keyboard_device = &device_ctx.as_ref().unwrap().keyboard_device;
-        loop {
-            keyboard_device.recv().await.unwrap();
-        }
-    });
-
-    join_set.spawn(async {
-        let device_ctx = DEVICE_CTX_INSTANCE.read().await;
-        let keyboard_device = &device_ctx.as_ref().unwrap().keyboard_device;
-        loop {
-            keyboard_device.recv_legacy().await.unwrap();
-        }
+    let device_ctx = DeviceCtx::new(CONFIGFS_BASE).await.unwrap();
+    let device_ctx_recv = device_ctx.clone();
+    join_set.spawn(async move {
+        let device_ctx_recv = device_ctx_recv.read().await;
+        let mut join_set = device_ctx_recv.join_set.lock().await;
+        let _ = join_set.join_next().await;
     });
 
     let assets_dir = PathBuf::from("ip-kvm-assets");
@@ -157,13 +179,12 @@ async fn main() -> error::Result<()> {
         .route("/stream", routing::get(stream_handler))
         .route("/keyboard", routing::get(keyboard::ws_handler))
         .route("/mouse", routing::get(mouse::ws_handler))
-        .route("/mouse_legacy", routing::get(mouse_legacy::ws_handler))
-
+        // .route("/mouse_legacy", routing::get(mouse_legacy::ws_handler))
         .with_state(client)
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::default().include_headers(true)),
-        );
+        ).layer(Extension(device_ctx.clone()));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     let server = Server::bind(&addr)
@@ -171,23 +192,23 @@ async fn main() -> error::Result<()> {
 
     join_set.spawn(async { server.await.unwrap() });
 
-
-    match signal::ctrl_c().await {
-        Ok(()) => {}
-        Err(err) => {
-            eprintln!("Unable to listen for shutdown signal: {}", err);
+    join_set.spawn(async {
+        match signal::ctrl_c().await {
+            Ok(()) => {}
+            Err(err) => {
+                eprintln!("Unable to listen for shutdown signal: {}", err);
+            }
         }
-    }
-    println!("Now shutdown ip-kvm...");
+    });
 
+
+    let _ = join_set.join_next().await;
+
+    println!("Now shutdown IP-KVM...");
     join_set.shutdown().await;
+    device_ctx.read().await.abort_join_set().await;
+    println!("IP-KVM join_set shutdown.");
 
-    println!("Wait DEVICE_CTX_INSTANCE write lock.");
-    *DEVICE_CTX_INSTANCE.write().await = None;
-    println!("Drop device ctx success!");
-
-    GadgetInfo::cleanup(&format!("{CONFIGFS_BASE}/ip-kvm"))?;
-    println!("GadgetInfo cleanup success.");
     Ok(())
 }
 
