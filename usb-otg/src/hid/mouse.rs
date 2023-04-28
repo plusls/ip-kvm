@@ -117,6 +117,8 @@ pub struct Mouse {
 
 impl Mouse {
     pub const ABS_MAX: u16 = 0x7fff;
+    pub const REL_MIN: i8 = -127;
+    pub const WHEEL_MIN: i8 = -127;
 
     pub fn clear(&mut self) {
         self.button = 0;
@@ -149,34 +151,34 @@ impl Mouse {
         if y > Self::ABS_MAX {
             y = Self::ABS_MAX;
         }
-        if wheel == -128 {
-            wheel = -127;
+        if wheel < Self::WHEEL_MIN {
+            wheel = Self::WHEEL_MIN;
         }
 
         let mut ret = [0; 6];
         ret[0] = self.button;
         ret[1..3].copy_from_slice(&x.to_le_bytes());
         ret[3..5].copy_from_slice(&y.to_le_bytes());
-        ret[5..6].copy_from_slice(&wheel.to_le_bytes());
+        ret[3] = wheel as u8;
         ret
     }
 
     pub fn get_legacy_payload(&self, mut x: i8, mut y: i8, mut wheel: i8) -> [u8; 4] {
-        if x == -128 {
-            x = -127;
+        if x < Self::REL_MIN {
+            x = Self::REL_MIN;
         }
-        if y == -128 {
-            y = -127;
+        if y < Self::REL_MIN {
+            y = Self::REL_MIN;
         }
-        if wheel == -128 {
-            wheel = -127;
+        if wheel < Self::WHEEL_MIN {
+            wheel = Self::WHEEL_MIN;
         }
 
         let mut ret = [0; 4];
         ret[0] = self.button;
-        ret[1..2].copy_from_slice(&x.to_le_bytes());
-        ret[2..3].copy_from_slice(&y.to_le_bytes());
-        ret[3..4].copy_from_slice(&wheel.to_le_bytes());
+        ret[1] = x as u8;
+        ret[2] = y as u8;
+        ret[3] = wheel as u8;
         ret
     }
 }

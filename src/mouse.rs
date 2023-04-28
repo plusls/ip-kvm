@@ -93,7 +93,7 @@ async fn process_message(device_ctx: Arc<RwLock<DeviceCtx>>, msg: Message, who: 
                 return ControlFlow::Break(());
             }
             let wheel = d[5] as i8;
-            if wheel == -128 {
+            if wheel < Mouse::WHEEL_MIN {
                 return ControlFlow::Break(());
             }
             let mouse_device = &device_ctx.read().await.mouse_device;

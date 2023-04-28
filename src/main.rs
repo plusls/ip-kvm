@@ -29,7 +29,7 @@ use usb_otg::{Configurable, GadgetInfo, hid, UsbConfiguration};
 
 mod keyboard;
 mod mouse;
-// mod mouse_legacy;
+mod mouse_legacy;
 
 const CONFIGFS_BASE: &str = "/sys/kernel/config/usb_gadget";
 
@@ -178,7 +178,7 @@ async fn main() -> error::Result<()> {
         .route("/stream", routing::get(stream_handler))
         .route("/keyboard", routing::get(keyboard::ws_handler))
         .route("/mouse", routing::get(mouse::ws_handler))
-        // .route("/mouse_legacy", routing::get(mouse_legacy::ws_handler))
+        .route("/mouse_legacy", routing::get(mouse_legacy::ws_handler))
         .with_state(client)
         .layer(
             TraceLayer::new_for_http()
