@@ -496,7 +496,7 @@ impl KeyboardDevice {
         keyboard.led[0] = (keyboard.led[0] & 0xe0) | (led_buf[0] & 0x1f);
 
         self.keyboard_update_sender.send_if_modified(|keyboard_state| {
-            if keyboard.led[0] != keyboard_state[0] {
+            if keyboard_state[0] != keyboard.led[0] {
                 keyboard_state[0] = keyboard.led[0];
                 true
             } else {

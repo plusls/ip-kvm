@@ -44,7 +44,6 @@ pub struct DeviceCtx {
 const UDC_PATH: &str = "/sys/class/udc";
 
 impl DeviceCtx {
-    // RwLock Option 是为了方便析构 DeviceCtx
     pub async fn new(configfs_base: &str) -> error::Result<Arc<RwLock<Self>>> {
         let mut gadget_info: GadgetInfo = Default::default();
         gadget_info.functions.insert("hid.usb0".into(), Box::new(usb_otg::hid::keyboard::KEYBOARD_LEGACY_FHO.clone()));

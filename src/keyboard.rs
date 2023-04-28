@@ -41,15 +41,24 @@ pub async fn ws_handler(
 }
 
 async fn handle_socket(device_ctx: Arc<RwLock<DeviceCtx>>, socket: WebSocket, who: SocketAddr) {
-    let (sender, mut receiver) = socket.split();
+    let (mut sender, mut receiver) = socket.split();
 
     let mut join_set = JoinSet::new();
     let device_ctx_send = device_ctx.clone();
     join_set.spawn(async move {
-        let sender = Arc::new(Mutex::new(sender));
-
         let keyboard_device = &device_ctx_send.read().await.keyboard_device;
-        let keyboard_receiver = Arc::new(Mutex::new(keyboard_device.keyboard_update_sender.subscribe()));
+        let mut keyboard_receiver = keyboard_device.keyboard_update_sender.subscribe();
+
+        // update at first
+        let keyboard_status = keyboard_receiver.borrow_and_update().to_vec();
+        if sender.send(Message::Binary(keyboard_status)).await.is_err() ||
+            sender.flush().await.is_err()
+        {
+            return;
+        }
+
+        let sender = Arc::new(Mutex::new(sender));
+        let keyboard_receiver = Arc::new(Mutex::new(keyboard_receiver));
 
         loop {
             let timeout_sender = sender.clone();
@@ -69,11 +78,15 @@ async fn handle_socket(device_ctx: Arc<RwLock<DeviceCtx>>, socket: WebSocket, wh
             join_set.spawn(async move {
                 let mut keyboard_receiver = keyboard_receiver.lock().await;
                 let mut keyboard_status_sender = keyboard_status_sender.lock().await;
-                let keyboard_status = keyboard_receiver.borrow_and_update().to_vec();
-                if keyboard_receiver.changed().await.is_ok() &&
-                    keyboard_status_sender.send(Message::Binary(keyboard_status)).await.is_ok()
-                {
-                    ControlFlow::Continue(())
+                if keyboard_receiver.changed().await.is_ok() {
+                    let keyboard_status = keyboard_receiver.borrow_and_update().to_vec();
+                    if keyboard_status_sender.send(Message::Binary(keyboard_status)).await.is_ok() &&
+                        keyboard_status_sender.flush().await.is_ok()
+                    {
+                        ControlFlow::Continue(())
+                    } else {
+                        ControlFlow::Break(())
+                    }
                 } else {
                     ControlFlow::Break(())
                 }
