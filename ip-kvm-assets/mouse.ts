@@ -17,14 +17,12 @@ function init_mouse() {
         event.preventDefault();
         event.stopPropagation();
         let pos = translate_pos(event.offsetX, event.offsetY, img.width, img.height);
-        console.log(pos);
         send_mouse_data(event.buttons, pos[0], pos[1], 0);
     });
     img.addEventListener("mouseup", function (event: MouseEvent) {
         event.preventDefault();
         event.stopPropagation();
         let pos = translate_pos(event.offsetX, event.offsetY, img.width, img.height);
-        console.log(pos);
         send_mouse_data(event.buttons, pos[0], pos[1], 0);
     });
     img.addEventListener("contextmenu", function (event: MouseEvent) {
@@ -84,7 +82,6 @@ function send_mouse_data(button: number, x: number, y: number, wheel: number) {
     view[3] = y & 0xff;
     view[4] = (y >> 8) & 0x7f;
     view[5] = wheel;
-    console.log(y, view);
     mouse_socket.send(buffer);
 }
 

@@ -18,13 +18,20 @@ function init_stream_url_input() {
         localStorage.setItem('stream_url', JSON.stringify(stream_url_input.value));
     });
 
-    if ('stream_url' in localStorage) {
-        stream_url_input.value = JSON.parse(localStorage.getItem('stream_url'));
+    let stream_url = localStorage.getItem('stream_url');
+    if (stream_url != null) {
+        stream_url_input.value = JSON.parse(stream_url);
         let img: HTMLImageElement = document.getElementById("video") as HTMLImageElement;
         img.src = stream_url_input.value;
     }
 }
 
+function paste_button_on_click() {
+    let paste_input = document.getElementById("paste_input") as HTMLInputElement;
+    if (!send_ascii_str(paste_input.value)) {
+        alert("Input contains no asscii char.")
+    }
+}
 
 init_stream_url_input();
 resize_video();
