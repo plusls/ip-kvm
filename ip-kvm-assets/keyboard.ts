@@ -221,7 +221,7 @@ let key_board_status: Uint8Array = new Uint8Array(new Array(0x20).fill(0));
 
 let keyboard_socket: WebSocket | null = null;
 
-function init_ws() {
+function init_keyboard_ws() {
     keyboard_socket = new WebSocket("ws://" + location.host + '/keyboard');
     keyboard_socket.binaryType = "arraybuffer"
     keyboard_socket.onclose = function (event: CloseEvent) {
@@ -232,7 +232,7 @@ function init_ws() {
             // 在这种情况下，event.code 通常为 1006
             alert('[close] Connection died');
         }
-        init_ws();
+        init_keyboard_ws();
     };
     keyboard_socket.onmessage = function (event: MessageEvent) {
         key_board_status = new Uint8Array(event.data)
@@ -240,7 +240,14 @@ function init_ws() {
     }
 }
 
-init_ws();
+init_keyboard_ws();
 
 document.addEventListener('keydown', on_key_down);
 document.addEventListener('keyup', on_key_up);
+
+function paste_button_on_click() {
+    let paste_input = document.getElementById("paste_input") as HTMLInputElement;
+    if (!send_ascii_str(paste_input.value)) {
+        alert("Input contains no asscii char.")
+    }
+}

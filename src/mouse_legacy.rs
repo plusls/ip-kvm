@@ -87,7 +87,6 @@ async fn process_message(device_ctx: Arc<RwLock<DeviceCtx>>, msg: Message, who: 
             if x < Mouse::REL_MIN || y < Mouse::REL_MIN || wheel < Mouse::WHEEL_MIN {
                 return ControlFlow::Break(());
             }
-
             let mouse_device = &device_ctx.read().await.mouse_device;
             mouse_device.mouse.lock().await.button = d[0];
             let mut join_set = JoinSet::new();

@@ -26,12 +26,5 @@ function init_stream_url_input() {
     }
 }
 
-function paste_button_on_click() {
-    let paste_input = document.getElementById("paste_input") as HTMLInputElement;
-    if (!send_ascii_str(paste_input.value)) {
-        alert("Input contains no asscii char.")
-    }
-}
-
 init_stream_url_input();
 resize_video();
