@@ -2,7 +2,7 @@ let mouse_socket: WebSocket | null = null;
 let mouse_legacy_socket: WebSocket | null = null;
 
 function init_mouse_ws() {
-    mouse_socket = new WebSocket("ws://" + location.host + '/mouse');
+    mouse_socket = new WebSocket("ws://" + location.host + '/v1/ws/mouse');
     mouse_socket.onclose = function (event: CloseEvent) {
         if (event.wasClean) {
             alert(`[close] Connection closed cleanly, code=${event.code} reason=${event.reason}`);
@@ -16,7 +16,7 @@ function init_mouse_ws() {
 }
 
 function init_mouse_legacy_ws() {
-    mouse_legacy_socket = new WebSocket("ws://" + location.host + '/mouse_legacy');
+    mouse_legacy_socket = new WebSocket("ws://" + location.host + '/v1/ws/mouse_legacy');
     mouse_legacy_socket.onclose = function (event: CloseEvent) {
         if (event.wasClean) {
             alert(`[close] Connection closed cleanly, code=${event.code} reason=${event.reason}`);

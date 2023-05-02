@@ -222,7 +222,7 @@ let key_board_status: Uint8Array = new Uint8Array(new Array(0x20).fill(0));
 let keyboard_socket: WebSocket | null = null;
 
 function init_keyboard_ws() {
-    keyboard_socket = new WebSocket("ws://" + location.host + '/keyboard');
+    keyboard_socket = new WebSocket("ws://" + location.host + '/v1/ws/keyboard');
     keyboard_socket.binaryType = "arraybuffer"
     keyboard_socket.onclose = function (event: CloseEvent) {
         if (event.wasClean) {

@@ -176,9 +176,9 @@ async fn main() -> error::Result<()> {
     let app = Router::new()
         .fallback_service(ServeDir::new(assets_dir).append_index_html_on_directories(true))
         .route("/stream", routing::get(stream_handler))
-        .route("/keyboard", routing::get(keyboard::ws_handler))
-        .route("/mouse", routing::get(mouse::ws_handler))
-        .route("/mouse_legacy", routing::get(mouse_legacy::ws_handler))
+        .route("/v1/ws//keyboard", routing::get(keyboard::ws_handler))
+        .route("/v1/ws/mouse", routing::get(mouse::ws_handler))
+        .route("/v1/ws/mouse_legacy", routing::get(mouse_legacy::ws_handler))
         .with_state(client)
         .layer(
             TraceLayer::new_for_http()
