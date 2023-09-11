@@ -30,6 +30,8 @@ use usb_otg::{Configurable, GadgetInfo, hid, UsbConfiguration};
 mod keyboard;
 mod mouse;
 mod mouse_legacy;
+mod mass_storage;
+mod api_error;
 
 const CONFIGFS_BASE: &str = "/sys/kernel/config/usb_gadget";
 
@@ -50,6 +52,7 @@ impl DeviceCtx {
         gadget_info.functions.insert("hid.usb1".into(), Box::new(usb_otg::hid::keyboard::KEYBOARD_FHO.clone()));
         gadget_info.functions.insert("hid.usb2".into(), Box::new(usb_otg::hid::mouse::MOUSE_LEGACY_FHO.clone()));
         gadget_info.functions.insert("hid.usb3".into(), Box::new(usb_otg::hid::mouse::MOUSE_FHO.clone()));
+        gadget_info.functions.insert("mass_storage.usb0".into(), Box::new(usb_otg::mass_storage::FunctionMsgOpts::default()));
 
         let mut usb_config: UsbConfiguration = Default::default();
         usb_config.strings.insert(0x409, Default::default());
@@ -57,6 +60,7 @@ impl DeviceCtx {
         usb_config.functions.push("hid.usb1".into());
         usb_config.functions.push("hid.usb2".into());
         usb_config.functions.push("hid.usb3".into());
+        // usb_config.functions.push("mass_storage.usb0".into());
 
         gadget_info.configs.insert("c.1".into(), usb_config);
         gadget_info.strings.insert(0x409, Default::default());
@@ -162,6 +166,7 @@ impl Drop for DeviceCtx {
 async fn main() -> error::Result<()> {
     let mut join_set = JoinSet::new();
 
+    // TODO handle
     let device_ctx = DeviceCtx::new(CONFIGFS_BASE).await.unwrap();
     let device_ctx_recv = device_ctx.clone();
     join_set.spawn(async move {
@@ -176,9 +181,15 @@ async fn main() -> error::Result<()> {
     let app = Router::new()
         .fallback_service(ServeDir::new(assets_dir).append_index_html_on_directories(true))
         .route("/stream", routing::get(stream_handler))
-        .route("/v1/ws//keyboard", routing::get(keyboard::ws_handler))
+        .route("/v1/ws/keyboard", routing::get(keyboard::ws_handler))
         .route("/v1/ws/mouse", routing::get(mouse::ws_handler))
         .route("/v1/ws/mouse_legacy", routing::get(mouse_legacy::ws_handler))
+        .route("/v1/usb-images", routing::get(mass_storage::get_images))
+        .route("/v1/usb-image/:file_name", routing::get(mass_storage::get_image)
+            .delete(mass_storage::delete_image))
+        .route("/v1/usb-image/:file_name/block/:offset", routing::put(mass_storage::put_image_block))
+        .route("/v1/current-image", routing::put(mass_storage::put_current_image))
+
         .with_state(client)
         .layer(
             TraceLayer::new_for_http()

@@ -5,8 +5,12 @@ use std::path::Path;
 
 use util::{error, fs};
 
+use crate::hid::FunctionHidOpts;
+use crate::mass_storage::FunctionMsgOpts;
+
 pub mod hid;
 pub mod async_fd;
+pub mod mass_storage;
 
 pub enum UsbDeviceSpeed {
     // enumerating
@@ -154,7 +158,18 @@ impl Configurable for GadgetInfo {
         for entry in fs::read_dir(base_dir.join("functions"))? {
             let entry = entry.map_err(|err| error::ErrorKind::fs(err, "functions"))?;
             let path = entry.path();
-            FunctionDummyOpts::cleanup(&path)?;
+            if let Some(path_file_name) = path.file_name() {
+                let path_file_name = Path::new(path_file_name);
+                if path.starts_with(GadgetInfo::HID) {
+                    FunctionHidOpts::cleanup(&path)?;
+                } else if path.starts_with(GadgetInfo::MASS_STORAGE) {
+                    FunctionMsgOpts::cleanup(&path)?;
+                } else {
+                    FunctionDummyOpts::cleanup(&path)?;
+                }
+            } else {
+                Err(util::error::ErrorKind::custom(format!("Can't get file_name from {path:?}")))?;
+            }
         }
         OsDesc::cleanup(&base_dir.join("os_desc"))?;
         for entry in fs::read_dir(base_dir.join("strings"))? {
@@ -165,6 +180,11 @@ impl Configurable for GadgetInfo {
         fs::remove_dir(base_dir)?;
         Ok(())
     }
+}
+
+impl GadgetInfo {
+    pub const HID: &str = "hid";
+    pub const MASS_STORAGE: &str = "mass_storage";
 }
 
 pub struct UsbConfiguration {
@@ -193,8 +213,8 @@ impl Configurable for UsbConfiguration {
         fs::write(base_dir.join("bmAttributes"), self.bm_attributes.to_string())?;
         fs::write(base_dir.join("MaxPower"), self.max_power.to_string())?;
         let strings_base_dir = base_dir.join("strings");
-        for entry in &mut self.strings {
-            entry.1.apply_config(&strings_base_dir.join(format!("{:#x}", entry.0)))?;
+        for (language_code, gadget_config_name) in &mut self.strings {
+            gadget_config_name.apply_config(&strings_base_dir.join(format!("{:#x}", language_code)))?;
         }
         for function in &self.functions {
             let function_path = base_dir.join(function);

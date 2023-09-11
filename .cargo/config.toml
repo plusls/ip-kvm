@@ -17,6 +17,9 @@ linker = "aarch64-linux-android33-clang"
 [target.aarch64-unknown-linux-musl]
 linker = "rust-lld"
 
+[target.arm-unknown-linux-musleabi]
+linker = "rust-lld"
+
 #fn main() {
 #println!("cargo:rerun-if-changed=build.rs");
 #println!("cargo:rerun-if-changed=dynamiclist");
