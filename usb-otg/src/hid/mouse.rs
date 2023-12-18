@@ -159,7 +159,7 @@ impl Mouse {
         ret[0] = self.button;
         ret[1..3].copy_from_slice(&x.to_le_bytes());
         ret[3..5].copy_from_slice(&y.to_le_bytes());
-        ret[3] = wheel as u8;
+        ret[5] = wheel as u8;
         ret
     }
 
