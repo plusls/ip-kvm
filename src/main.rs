@@ -8,7 +8,6 @@ use axum::{
     response::{IntoResponse, Response},
     routing, Router,
 };
-use log::{ error, info, LevelFilter};
 
 use hyper::StatusCode;
 
@@ -98,7 +97,7 @@ impl DeviceCtx {
             Err(error::ErrorKind::custom("Can not found udc".into()))?;
         }
 
-        info!("UDC name: {}", gadget_info.udc);
+        log::info!("UDC name: {}", gadget_info.udc);
 
         gadget_info.bcd_usb = 0x210; // USB 2.1
 
@@ -128,8 +127,10 @@ impl DeviceCtx {
             .unwrap()
             .minor;
 
-        info!("keyboard_legacy_minor: {keyboard_legacy_minor} keyboard_minor: {keyboard_minor}");
-        info!("mouse_legacy_minor: {mouse_legacy_minor} mouse_minor: {mouse_minor}");
+        log::info!(
+            "keyboard_legacy_minor: {keyboard_legacy_minor} keyboard_minor: {keyboard_minor}"
+        );
+        log::info!("mouse_legacy_minor: {mouse_legacy_minor} mouse_minor: {mouse_minor}");
 
         let hid_path_list: Vec<_> = [
             keyboard_legacy_minor,
@@ -177,18 +178,18 @@ impl DeviceCtx {
         Ok(ret)
     }
     pub async fn abort_join_set(&self) {
-        info!("DeviceCtx start shutdown.");
+        log::info!("DeviceCtx start shutdown.");
         self.join_set.lock().await.shutdown().await;
-        info!("DeviceCtx shutdown success.");
+        log::info!("DeviceCtx shutdown success.");
     }
 }
 
 impl Drop for DeviceCtx {
     fn drop(&mut self) {
         if let Err(err) = GadgetInfo::cleanup(&self.usb_gadget_path) {
-            error!("GadgetInfo cleanup failed: {err}");
+            log::error!("GadgetInfo cleanup failed: {err}");
         } else {
-            info!("GadgetInfo cleanup success.");
+            log::info!("GadgetInfo cleanup success.");
         }
     }
 }
@@ -200,7 +201,7 @@ async fn main() -> error::Result<()> {
     let mut join_set = JoinSet::new();
 
     pretty_env_logger::formatted_builder()
-        .filter_level(LevelFilter::Info)
+        .filter_level(log::LevelFilter::Info)
         .parse_default_env()
         .init();
 
@@ -251,7 +252,7 @@ async fn main() -> error::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
 
-    info!("listening on {}", listener.local_addr().unwrap());
+    log::info!("listening on {}", listener.local_addr().unwrap());
 
     let server = axum::serve(
         listener,
@@ -264,17 +265,17 @@ async fn main() -> error::Result<()> {
         match signal::ctrl_c().await {
             Ok(()) => {}
             Err(err) => {
-                error!("Unable to listen for shutdown signal: {}", err);
+                log::error!("Unable to listen for shutdown signal: {}", err);
             }
         }
     });
 
     let _ = join_set.join_next().await;
 
-    info!("Now shutdown IP-KVM...");
+    log::info!("Now shutdown IP-KVM...");
     join_set.shutdown().await;
     device_ctx.read().await.abort_join_set().await;
-    info!("IP-KVM join_set shutdown.");
+    log::info!("IP-KVM join_set shutdown.");
 
     Ok(())
 }

@@ -8,8 +8,8 @@ use util::{error, fs};
 use crate::hid::FunctionHidOpts;
 use crate::mass_storage::FunctionMsgOpts;
 
-pub mod hid;
 pub mod async_fd;
+pub mod hid;
 pub mod mass_storage;
 
 pub enum UsbDeviceSpeed {
@@ -37,18 +37,23 @@ impl UsbDeviceSpeed {
             Self::UsbSpeedHigh => "high-speed",
             Self::UsbSpeedWireless => "wireless",
             Self::UsbSpeedSuper => "super-speed",
-            Self::UsbSpeedSuperPlus => "super-speed-plus"
+            Self::UsbSpeedSuperPlus => "super-speed-plus",
         }
     }
 }
 
-
 pub trait Configurable: Any {
     fn apply_config(&mut self, base_dir: &dyn AsRef<Path>) -> error::Result<()>;
-    fn from_config(_base_dir: &dyn AsRef<Path>) -> error::Result<Self> where Self: Sized {
+    fn from_config(_base_dir: &dyn AsRef<Path>) -> error::Result<Self>
+    where
+        Self: Sized,
+    {
         unimplemented!()
     }
-    fn cleanup<P: AsRef<Path>>(base_dir: P) -> error::Result<()> where Self: Sized {
+    fn cleanup<P: AsRef<Path>>(base_dir: P) -> error::Result<()>
+    where
+        Self: Sized,
+    {
         let base_dir = base_dir.as_ref();
         if !base_dir.is_dir() {
             return Ok(());
@@ -114,10 +119,22 @@ impl Configurable for GadgetInfo {
         fs::create_dir(base_dir)?;
         fs::write(base_dir.join("bcdDevice"), self.bcd_device.to_string())?;
         fs::write(base_dir.join("bcdUSB"), self.bcd_usb.to_string())?;
-        fs::write(base_dir.join("bDeviceClass"), self.b_device_class.to_string())?;
-        fs::write(base_dir.join("bDeviceProtocol"), self.b_device_protocol.to_string())?;
-        fs::write(base_dir.join("bDeviceSubClass"), self.b_device_sub_class.to_string())?;
-        fs::write(base_dir.join("bMaxPacketSize0"), self.b_max_packet_size0.to_string())?;
+        fs::write(
+            base_dir.join("bDeviceClass"),
+            self.b_device_class.to_string(),
+        )?;
+        fs::write(
+            base_dir.join("bDeviceProtocol"),
+            self.b_device_protocol.to_string(),
+        )?;
+        fs::write(
+            base_dir.join("bDeviceSubClass"),
+            self.b_device_sub_class.to_string(),
+        )?;
+        fs::write(
+            base_dir.join("bMaxPacketSize0"),
+            self.b_max_packet_size0.to_string(),
+        )?;
         let functions_base_dir = base_dir.join("functions");
         for entry in &mut self.functions {
             entry.1.apply_config(&functions_base_dir.join(entry.0))?;
@@ -135,13 +152,18 @@ impl Configurable for GadgetInfo {
         }
         let strings_base_dir = base_dir.join("strings");
         for entry in &mut self.strings {
-            entry.1.apply_config(&strings_base_dir.join(format!("{:#x}", entry.0)))?;
+            entry
+                .1
+                .apply_config(&strings_base_dir.join(format!("{:#x}", entry.0)))?;
         }
         fs::write(base_dir.join("UDC"), &self.udc)?;
         Ok(())
     }
 
-    fn cleanup<P: AsRef<Path>>(base_dir: P) -> error::Result<()> where Self: Sized {
+    fn cleanup<P: AsRef<Path>>(base_dir: P) -> error::Result<()>
+    where
+        Self: Sized,
+    {
         let base_dir = base_dir.as_ref();
         if !base_dir.is_dir() {
             return Ok(());
@@ -160,15 +182,18 @@ impl Configurable for GadgetInfo {
             let path = entry.path();
             if let Some(path_file_name) = path.file_name() {
                 let path_file_name = Path::new(path_file_name);
-                if path.starts_with(GadgetInfo::HID) {
-                    FunctionHidOpts::cleanup(&path)?;
-                } else if path.starts_with(GadgetInfo::MASS_STORAGE) {
-                    FunctionMsgOpts::cleanup(&path)?;
+                log::debug!("Now clean {}", path.display());
+                if path_file_name.starts_with(GadgetInfo::HID) {
+                    FunctionHidOpts::cleanup(path)?;
+                } else if path_file_name.starts_with(GadgetInfo::MASS_STORAGE) {
+                    FunctionMsgOpts::cleanup(path)?;
                 } else {
-                    FunctionDummyOpts::cleanup(&path)?;
+                    FunctionDummyOpts::cleanup(path)?;
                 }
             } else {
-                Err(util::error::ErrorKind::custom(format!("Can't get file_name from {path:?}")))?;
+                Err(util::error::ErrorKind::custom(format!(
+                    "Can't get file_name from {path:?}"
+                )))?;
             }
         }
         OsDesc::cleanup(&base_dir.join("os_desc"))?;
@@ -194,7 +219,6 @@ pub struct UsbConfiguration {
     pub strings: HashMap<u16, GadgetConfigName>,
 }
 
-
 impl Default for UsbConfiguration {
     fn default() -> Self {
         Self {
@@ -210,25 +234,36 @@ impl Configurable for UsbConfiguration {
     fn apply_config(&mut self, base_dir: &dyn AsRef<Path>) -> error::Result<()> {
         let base_dir = base_dir.as_ref();
         fs::create_dir(base_dir)?;
-        fs::write(base_dir.join("bmAttributes"), self.bm_attributes.to_string())?;
+        fs::write(
+            base_dir.join("bmAttributes"),
+            self.bm_attributes.to_string(),
+        )?;
         fs::write(base_dir.join("MaxPower"), self.max_power.to_string())?;
         let strings_base_dir = base_dir.join("strings");
         for (language_code, gadget_config_name) in &mut self.strings {
-            gadget_config_name.apply_config(&strings_base_dir.join(format!("{:#x}", language_code)))?;
+            gadget_config_name
+                .apply_config(&strings_base_dir.join(format!("{:#x}", language_code)))?;
         }
         for function in &self.functions {
             let function_path = base_dir.join(function);
-            symlink(base_dir.join(format!("../../functions/{function}")), &function_path).map_err(|err| error::ErrorKind::fs(err, function_path))?;
+            symlink(
+                base_dir.join(format!("../../functions/{function}")),
+                &function_path,
+            )
+            .map_err(|err| error::ErrorKind::fs(err, function_path))?;
         }
         Ok(())
     }
-    fn cleanup<P: AsRef<Path>>(base_dir: P) -> error::Result<()> where Self: Sized {
+    fn cleanup<P: AsRef<Path>>(base_dir: P) -> error::Result<()>
+    where
+        Self: Sized,
+    {
         let base_dir = base_dir.as_ref();
         if !base_dir.is_dir() {
             return Ok(());
         }
         for entry in fs::read_dir(base_dir)? {
-            let entry = entry.map_err(|err| error::ErrorKind::fs(err, base_dir.clone()))?;
+            let entry = entry.map_err(|err| error::ErrorKind::fs(err, base_dir))?;
             let path = entry.path();
             let metadata = fs::symlink_metadata(&path)?;
             if metadata.is_symlink() {
@@ -251,7 +286,6 @@ pub struct GadgetStrings {
     pub serialnumber: String,
 }
 
-
 impl Default for GadgetStrings {
     fn default() -> Self {
         Self {
@@ -273,7 +307,6 @@ impl Configurable for GadgetStrings {
     }
 }
 
-
 pub struct OsDesc {
     pub b_vendor_code: u8,
     pub qw_sign: String,
@@ -292,11 +325,17 @@ impl Configurable for OsDesc {
     fn apply_config(&mut self, base_dir: &dyn AsRef<Path>) -> error::Result<()> {
         let base_dir = base_dir.as_ref();
         fs::write(base_dir.join("use"), "1")?;
-        fs::write(base_dir.join("b_vendor_code"), self.b_vendor_code.to_string())?;
+        fs::write(
+            base_dir.join("b_vendor_code"),
+            self.b_vendor_code.to_string(),
+        )?;
         fs::write(base_dir.join("qw_sign"), &self.qw_sign)?;
         Ok(())
     }
-    fn cleanup<P: AsRef<Path>>(base_dir: P) -> error::Result<()> where Self: Sized {
+    fn cleanup<P: AsRef<Path>>(base_dir: P) -> error::Result<()>
+    where
+        Self: Sized,
+    {
         let base_dir = base_dir.as_ref();
         fs::write(base_dir.join("use"), "0")?;
         Ok(())
@@ -312,7 +351,7 @@ impl GadgetConfigName {}
 impl Default for GadgetConfigName {
     fn default() -> Self {
         Self {
-            configuration: "\n".to_string()
+            configuration: "\n".to_string(),
         }
     }
 }
@@ -325,4 +364,3 @@ impl Configurable for GadgetConfigName {
         Ok(())
     }
 }
-
