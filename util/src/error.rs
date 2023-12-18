@@ -6,8 +6,8 @@ use thiserror::Error as ThisError;
 pub type Result<T> = core::result::Result<T, Error>;
 
 impl<E> From<E> for Error
-    where
-        ErrorKind: From<E>,
+where
+    ErrorKind: From<E>,
 {
     fn from(err: E) -> Self {
         Error(Box::new(ErrorKind::from(err)))
@@ -27,17 +27,14 @@ pub enum ErrorKind {
         backtrace: Backtrace,
     },
     #[error("Error: {msg}\nBacktrace: {backtrace}")]
-    Custom {
-        msg: String,
-        backtrace: Backtrace,
-    },
+    Custom { msg: String, backtrace: Backtrace },
 }
 
 impl ErrorKind {
     pub fn fs<P: AsRef<Path>>(err: std::io::Error, path: P) -> Self {
         Self::Fs {
             source: err,
-            path: format!("{:?}", path.as_ref()),
+            path: format!("{}", path.as_ref().display()),
             backtrace: Backtrace::capture(),
         }
     }

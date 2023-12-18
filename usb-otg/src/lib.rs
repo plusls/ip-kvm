@@ -183,8 +183,8 @@ impl Configurable for GadgetInfo {
 }
 
 impl GadgetInfo {
-    pub const HID: &str = "hid";
-    pub const MASS_STORAGE: &str = "mass_storage";
+    pub const HID: &'static str = "hid";
+    pub const MASS_STORAGE: &'static str = "mass_storage";
 }
 
 pub struct UsbConfiguration {

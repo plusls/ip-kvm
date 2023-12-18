@@ -1,21 +1,16 @@
-use std::{
-    net::SocketAddr,
-    ops::ControlFlow,
-    sync::Arc,
-    time::Duration,
-};
+use std::{net::SocketAddr, ops::ControlFlow, sync::Arc, time::Duration};
 
 use axum::{
-    Extension,
     extract::{
-        ConnectInfo,
-        WebSocketUpgrade,
         ws::{Message, WebSocket},
+        ConnectInfo, WebSocketUpgrade,
     },
-    headers,
     response::IntoResponse,
-    TypedHeader,
+    Extension,
 };
+
+use axum_extra::{headers, TypedHeader};
+
 use futures::{SinkExt, StreamExt};
 use tokio::{
     sync::{Mutex, RwLock},
@@ -51,8 +46,8 @@ async fn handle_socket(device_ctx: Arc<RwLock<DeviceCtx>>, socket: WebSocket, wh
 
         // update at first
         let keyboard_status = keyboard_receiver.borrow_and_update().to_vec();
-        if sender.send(Message::Binary(keyboard_status)).await.is_err() ||
-            sender.flush().await.is_err()
+        if sender.send(Message::Binary(keyboard_status)).await.is_err()
+            || sender.flush().await.is_err()
         {
             return;
         }
@@ -66,7 +61,13 @@ async fn handle_socket(device_ctx: Arc<RwLock<DeviceCtx>>, socket: WebSocket, wh
             let mut join_set = JoinSet::new();
             join_set.spawn(async move {
                 tokio::time::sleep(Duration::from_millis(1000)).await;
-                if timeout_sender.lock().await.send(Message::Ping(vec![1, 2, 3])).await.is_ok() {
+                if timeout_sender
+                    .lock()
+                    .await
+                    .send(Message::Ping(vec![1, 2, 3]))
+                    .await
+                    .is_ok()
+                {
                     ControlFlow::Continue(())
                 } else {
                     ControlFlow::Break(())
@@ -80,8 +81,11 @@ async fn handle_socket(device_ctx: Arc<RwLock<DeviceCtx>>, socket: WebSocket, wh
                 let mut keyboard_status_sender = keyboard_status_sender.lock().await;
                 if keyboard_receiver.changed().await.is_ok() {
                     let keyboard_status = keyboard_receiver.borrow_and_update().to_vec();
-                    if keyboard_status_sender.send(Message::Binary(keyboard_status)).await.is_ok() &&
-                        keyboard_status_sender.flush().await.is_ok()
+                    if keyboard_status_sender
+                        .send(Message::Binary(keyboard_status))
+                        .await
+                        .is_ok()
+                        && keyboard_status_sender.flush().await.is_ok()
                     {
                         ControlFlow::Continue(())
                     } else {
@@ -105,7 +109,10 @@ async fn handle_socket(device_ctx: Arc<RwLock<DeviceCtx>>, socket: WebSocket, wh
     let device_ctx_recv = device_ctx.clone();
     join_set.spawn(async move {
         while let Some(Ok(msg)) = receiver.next().await {
-            if process_message(device_ctx_recv.clone(), msg, who).await.is_break() {
+            if process_message(device_ctx_recv.clone(), msg, who)
+                .await
+                .is_break()
+            {
                 break;
             }
         }
@@ -113,7 +120,6 @@ async fn handle_socket(device_ctx: Arc<RwLock<DeviceCtx>>, socket: WebSocket, wh
 
     let _ = join_set.join_next().await;
     join_set.shutdown().await;
-
 
     println!("Websocket context {} destroyed", who);
 }
@@ -142,7 +148,11 @@ async fn send_keyboard_update(device_ctx: Arc<RwLock<DeviceCtx>>) -> ControlFlow
     ret
 }
 
-async fn process_message(device_ctx: Arc<RwLock<DeviceCtx>>, msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
+async fn process_message(
+    device_ctx: Arc<RwLock<DeviceCtx>>,
+    msg: Message,
+    who: SocketAddr,
+) -> ControlFlow<(), ()> {
     match msg {
         Message::Binary(d) => {
             let keyboard_device = &device_ctx.read().await.keyboard_device;
@@ -159,7 +169,10 @@ async fn process_message(device_ctx: Arc<RwLock<DeviceCtx>>, msg: Message, who: 
                 if d[2] != 0 || d[2] != 1 {
                     return ControlFlow::Break(());
                 }
-                if keyboard_device.set_sys_control_key(d[1] as u16, d[2] == 1).await {
+                if keyboard_device
+                    .set_sys_control_key(d[1] as u16, d[2] == 1)
+                    .await
+                {
                     return send_keyboard_update(device_ctx.clone()).await;
                 }
             }
@@ -176,8 +189,6 @@ async fn process_message(device_ctx: Arc<RwLock<DeviceCtx>>, msg: Message, who: 
             }
             ControlFlow::Break(())
         }
-        _ => {
-            ControlFlow::Continue(())
-        }
+        _ => ControlFlow::Continue(()),
     }
 }

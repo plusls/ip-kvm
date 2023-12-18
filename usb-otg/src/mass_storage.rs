@@ -14,7 +14,7 @@ pub struct FunctionMsgOpts {
 }
 
 impl FunctionMsgOpts {
-    pub const LUN_0: &str = "lun.0";
+    pub const LUN_0: &'static str = "lun.0";
 }
 
 impl Default for FunctionMsgOpts {

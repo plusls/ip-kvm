@@ -1,26 +1,18 @@
-use std::{
-    net::SocketAddr,
-    ops::ControlFlow,
-    sync::Arc,
-    time::Duration,
-};
+use std::{net::SocketAddr, ops::ControlFlow, sync::Arc, time::Duration};
 
 use axum::{
-    Extension,
     extract::{
-        ConnectInfo,
-        WebSocketUpgrade,
         ws::{Message, WebSocket},
+        ConnectInfo, WebSocketUpgrade,
     },
-    headers,
     response::IntoResponse,
-    TypedHeader,
+    Extension,
 };
+
+use axum_extra::{headers, TypedHeader};
+
 use futures::{SinkExt, StreamExt};
-use tokio::{
-    sync::RwLock,
-    task::JoinSet,
-    time};
+use tokio::{sync::RwLock, task::JoinSet, time};
 
 use usb_otg::hid::mouse::Mouse;
 
@@ -57,7 +49,10 @@ async fn handle_socket(device_ctx: Arc<RwLock<DeviceCtx>>, socket: WebSocket, wh
 
     join_set.spawn(async move {
         while let Some(Ok(msg)) = receiver.next().await {
-            if process_message(device_ctx.clone(), msg, who).await.is_break() {
+            if process_message(device_ctx.clone(), msg, who)
+                .await
+                .is_break()
+            {
                 break;
             }
         }
@@ -69,7 +64,11 @@ async fn handle_socket(device_ctx: Arc<RwLock<DeviceCtx>>, socket: WebSocket, wh
     println!("Websocket context {} destroyed", who);
 }
 
-async fn process_message(device_ctx: Arc<RwLock<DeviceCtx>>, msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
+async fn process_message(
+    device_ctx: Arc<RwLock<DeviceCtx>>,
+    msg: Message,
+    who: SocketAddr,
+) -> ControlFlow<(), ()> {
     match msg {
         Message::Binary(d) => {
             // 6 byte
@@ -128,8 +127,6 @@ async fn process_message(device_ctx: Arc<RwLock<DeviceCtx>>, msg: Message, who: 
             }
             ControlFlow::Break(())
         }
-        _ => {
-            ControlFlow::Continue(())
-        }
+        _ => ControlFlow::Continue(()),
     }
 }
