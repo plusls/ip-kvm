@@ -1,5 +1,4 @@
-use std::sync::Arc;
-use std::{any::Any, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{any::Any, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use axum::{
     body::Body,
@@ -10,9 +9,7 @@ use axum::{
 };
 
 use hyper::StatusCode;
-
 use hyper_util::{client::legacy::connect::HttpConnector, rt::TokioExecutor};
-
 use tokio::{
     main, signal,
     sync::{Mutex, RwLock},
@@ -23,9 +20,11 @@ use tower_http::{
     services::ServeDir,
     trace::{DefaultMakeSpan, TraceLayer},
 };
-use util::error;
+
+use clap::Parser;
 
 use usb_otg::{hid, Configurable, GadgetInfo, UsbConfiguration};
+use util::error;
 
 mod api_error;
 mod keyboard;
@@ -81,7 +80,7 @@ impl DeviceCtx {
 
         let mut udc_name = None;
         for entry in util::fs::read_dir(UDC_PATH)? {
-            let entry = entry.map_err(|err| error::ErrorKind::fs(err, UDC_PATH))?;
+            let entry = entry.map_err(|err| error::ErrorKind::io(err, UDC_PATH))?;
             let path = entry.path();
             if let Some(path_file_name) = path.file_name() {
                 if let Some(path_file_name) = path_file_name.to_str() {
@@ -193,20 +192,38 @@ impl Drop for DeviceCtx {
         }
     }
 }
+#[derive(Parser, Debug, Clone)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(long, default_value = "127.0.0.1:3000")]
+    server_listen_addr: String,
+    #[arg(long, default_value = "127.0.0.1:3001")]
+    vnc_listen_addr: String,
+    #[arg(long, default_value = "http://127.0.0.1:3002")]
+    ustreamer_url: String,
+}
 
 type Client = hyper_util::client::legacy::Client<HttpConnector, Body>;
 
+struct AppState {
+    args: Args,
+    http_client: Client,
+}
+
 #[main]
 async fn main() -> error::Result<()> {
-    let mut join_set = JoinSet::new();
+    let http_client: Client =
+        hyper_util::client::legacy::Client::<(), ()>::builder(TokioExecutor::new())
+            .build(HttpConnector::new());
 
     pretty_env_logger::formatted_builder()
         .filter_level(log::LevelFilter::Info)
         .parse_default_env()
         .init();
 
-    // TODO handle
-    let device_ctx = DeviceCtx::new(CONFIGFS_BASE).await.unwrap();
+    let mut join_set = JoinSet::new();
+
+    let device_ctx = DeviceCtx::new(CONFIGFS_BASE).await?;
     let device_ctx_recv = device_ctx.clone();
     join_set.spawn(async move {
         let device_ctx_recv = device_ctx_recv.read().await;
@@ -215,9 +232,11 @@ async fn main() -> error::Result<()> {
     });
 
     let assets_dir = PathBuf::from("ip-kvm-assets");
-    let client: Client =
-        hyper_util::client::legacy::Client::<(), ()>::builder(TokioExecutor::new())
-            .build(HttpConnector::new());
+
+    let app_state = Arc::new(AppState {
+        args: Args::parse(),
+        http_client,
+    });
 
     let app = Router::new()
         .fallback_service(ServeDir::new(assets_dir).append_index_html_on_directories(true))
@@ -241,18 +260,23 @@ async fn main() -> error::Result<()> {
             "/v1/current-image",
             routing::put(mass_storage::put_current_image),
         )
-        .with_state(client)
+        .with_state(app_state.clone())
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::default().include_headers(true)),
         )
         .layer(Extension(device_ctx.clone()));
 
-    let addr = "0.0.0.0:3000";
+    let listener = tokio::net::TcpListener::bind(&app_state.args.server_listen_addr)
+        .await
+        .map_err(|err| error::ErrorKind::io(err, &app_state.args.server_listen_addr))?;
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-
-    log::info!("listening on {}", listener.local_addr().unwrap());
+    log::info!(
+        "listening on {}",
+        listener
+            .local_addr()
+            .map_err(|err| error::ErrorKind::io(err, &app_state.args.server_listen_addr))?
+    );
 
     let server = axum::serve(
         listener,
@@ -281,7 +305,7 @@ async fn main() -> error::Result<()> {
 }
 
 async fn stream_handler(
-    State(client): State<Client>,
+    State(app_state): State<Arc<AppState>>,
     mut req: Request<Body>,
 ) -> Result<Response, StatusCode> {
     let path = req.uri().path();
@@ -291,12 +315,12 @@ async fn stream_handler(
         .map(|v| v.as_str())
         .unwrap_or(path);
 
-    // TODO 可配置的 stream URL
-    let uri = format!("http://127.0.0.1:3001{}", path_query);
+    let uri = format!("{}{path_query}", app_state.args.ustreamer_url);
 
     *req.uri_mut() = Uri::try_from(uri).unwrap();
 
-    Ok(client
+    Ok(app_state
+        .http_client
         .request(req)
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?

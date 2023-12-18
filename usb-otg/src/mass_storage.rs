@@ -49,7 +49,7 @@ impl Configurable for FunctionMsgOpts {
         }
 
         for entry in fs::read_dir(base_dir.join("."))? {
-            let entry = entry.map_err(|err| error::ErrorKind::fs(err, "."))?;
+            let entry = entry.map_err(|err| error::ErrorKind::io(err, "."))?;
             let path = entry.path();
 
             if path.starts_with("lun.") {

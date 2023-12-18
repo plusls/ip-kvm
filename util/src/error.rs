@@ -20,10 +20,10 @@ pub struct Error(pub Box<ErrorKind>);
 
 #[derive(ThisError, Debug)]
 pub enum ErrorKind {
-    #[error("IO error when processing file {path}\nCause: {source}\nBacktrace: {backtrace}")]
-    Fs {
+    #[error("IO error when processing {process_info}\nCause: {source}\nBacktrace: {backtrace}")]
+    Io {
         source: std::io::Error,
-        path: String,
+        process_info: String,
         backtrace: Backtrace,
     },
     #[error("Error: {msg}\nBacktrace: {backtrace}")]
@@ -31,10 +31,10 @@ pub enum ErrorKind {
 }
 
 impl ErrorKind {
-    pub fn fs<P: AsRef<Path>>(err: std::io::Error, path: P) -> Self {
-        Self::Fs {
+    pub fn io<P: AsRef<Path>>(err: std::io::Error, process_info: P) -> Self {
+        Self::Io {
             source: err,
-            path: format!("{}", path.as_ref().display()),
+            process_info: format!("{}", process_info.as_ref().display()),
             backtrace: Backtrace::capture(),
         }
     }

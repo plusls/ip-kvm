@@ -197,12 +197,12 @@ impl MouseDevice {
 
         let mouse_dev_write =
             AsyncFd::try_from(fcntl::open(mouse_dev_name.as_str(), fcntl::OFlag::O_WRONLY, Mode::empty())
-                .map_err(|err| error::ErrorKind::fs(err.into(), &mouse_dev_name))?
+                .map_err(|err| error::ErrorKind::io(err.into(), &mouse_dev_name))?
             ).unwrap();
 
         let mouse_legacy_dev_write =
             AsyncFd::try_from(fcntl::open(mouse_legacy_dev_name.as_str(), fcntl::OFlag::O_WRONLY, Mode::empty())
-                .map_err(|err| error::ErrorKind::fs(err.into(), &mouse_legacy_dev_name))?
+                .map_err(|err| error::ErrorKind::io(err.into(), &mouse_legacy_dev_name))?
             ).unwrap();
 
         let ret = Self {
@@ -224,7 +224,7 @@ impl MouseDevice {
         let payload = self.mouse.lock().await.get_payload(x, y, wheel);
         println!("mouse send {payload:?} {}", mouse_dev_write.as_raw_fd());
         mouse_dev_write.write_all(&payload).await
-            .map_err(|err| error::ErrorKind::fs(err, "mouse_dev write_all"))?;
+            .map_err(|err| error::ErrorKind::io(err, "mouse_dev write_all"))?;
         Ok(())
     }
     pub async fn send_legacy(&self, x: i8, y: i8, wheel: i8) -> error::Result<()> {
@@ -232,7 +232,7 @@ impl MouseDevice {
         let payload = self.mouse.lock().await.get_legacy_payload(x, y, wheel);
         println!("mouse send_legacy {payload:?}");
         mouse_legacy_dev.write_all(&payload).await
-            .map_err(|err| error::ErrorKind::fs(err, "mouse_legacy_dev write_all"))?;
+            .map_err(|err| error::ErrorKind::io(err, "mouse_legacy_dev write_all"))?;
         Ok(())
     }
 }

@@ -173,12 +173,12 @@ impl Configurable for GadgetInfo {
             fs::write(udc_path, "\n")?;
         }
         for entry in fs::read_dir(base_dir.join("configs"))? {
-            let entry = entry.map_err(|err| error::ErrorKind::fs(err, "configs"))?;
+            let entry = entry.map_err(|err| error::ErrorKind::io(err, "configs"))?;
             let path = entry.path();
             UsbConfiguration::cleanup(&path)?;
         }
         for entry in fs::read_dir(base_dir.join("functions"))? {
-            let entry = entry.map_err(|err| error::ErrorKind::fs(err, "functions"))?;
+            let entry = entry.map_err(|err| error::ErrorKind::io(err, "functions"))?;
             let path = entry.path();
             if let Some(path_file_name) = path.file_name() {
                 let path_file_name = Path::new(path_file_name);
@@ -198,7 +198,7 @@ impl Configurable for GadgetInfo {
         }
         OsDesc::cleanup(&base_dir.join("os_desc"))?;
         for entry in fs::read_dir(base_dir.join("strings"))? {
-            let entry = entry.map_err(|err| error::ErrorKind::fs(err, "strings"))?;
+            let entry = entry.map_err(|err| error::ErrorKind::io(err, "strings"))?;
             let path = entry.path();
             GadgetStrings::cleanup(&path)?;
         }
@@ -250,7 +250,7 @@ impl Configurable for UsbConfiguration {
                 base_dir.join(format!("../../functions/{function}")),
                 &function_path,
             )
-            .map_err(|err| error::ErrorKind::fs(err, function_path))?;
+            .map_err(|err| error::ErrorKind::io(err, function_path))?;
         }
         Ok(())
     }
@@ -263,7 +263,7 @@ impl Configurable for UsbConfiguration {
             return Ok(());
         }
         for entry in fs::read_dir(base_dir)? {
-            let entry = entry.map_err(|err| error::ErrorKind::fs(err, base_dir))?;
+            let entry = entry.map_err(|err| error::ErrorKind::io(err, base_dir))?;
             let path = entry.path();
             let metadata = fs::symlink_metadata(&path)?;
             if metadata.is_symlink() {
@@ -271,7 +271,7 @@ impl Configurable for UsbConfiguration {
             }
         }
         for entry in fs::read_dir(base_dir.join("strings"))? {
-            let entry = entry.map_err(|err| error::ErrorKind::fs(err, "strings"))?;
+            let entry = entry.map_err(|err| error::ErrorKind::io(err, "strings"))?;
             let path = entry.path();
             GadgetConfigName::cleanup(&path)?;
         }
