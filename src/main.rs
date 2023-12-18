@@ -8,7 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing, Router,
 };
-use log::{debug, error, info, warn, LevelFilter};
+use log::{ error, info, LevelFilter};
 
 use hyper::StatusCode;
 
