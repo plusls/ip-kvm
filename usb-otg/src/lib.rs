@@ -183,14 +183,22 @@ impl Configurable for GadgetInfo {
             let entry = entry.map_err(|err| error::ErrorKind::io(err, "functions"))?;
             let path = entry.path();
             if let Some(path_file_name) = path.file_name() {
-                let path_file_name = Path::new(path_file_name);
-                log::debug!("Now clean {}", path.display());
-                if path_file_name.starts_with(GadgetInfo::HID) {
-                    FunctionHidOpts::cleanup(path)?;
-                } else if path_file_name.starts_with(GadgetInfo::MASS_STORAGE) {
-                    FunctionMsgOpts::cleanup(path)?;
-                } else {
-                    FunctionDummyOpts::cleanup(path)?;
+                if let Some(path_file_name) = path_file_name.to_str() {
+                    log::debug!("Now clean {}", path.display());
+                    println!(
+                        "fuck3 {path_file_name:?} {} {} {} {}!",
+                        path_file_name.starts_with(GadgetInfo::HID),
+                        path_file_name.starts_with(GadgetInfo::MASS_STORAGE),
+                        GadgetInfo::MASS_STORAGE,
+                        GadgetInfo::HID
+                    );
+                    if path_file_name.starts_with(GadgetInfo::HID) {
+                        FunctionHidOpts::cleanup(path)?;
+                    } else if path_file_name.starts_with(GadgetInfo::MASS_STORAGE) {
+                        FunctionMsgOpts::cleanup(path)?;
+                    } else {
+                        FunctionDummyOpts::cleanup(path)?;
+                    }
                 }
             } else {
                 Err(util::error::ErrorKind::custom(format!(

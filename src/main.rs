@@ -47,30 +47,44 @@ const FUNCTION_NAME_KEYBOARD_LEGACY: &str = "hid.keyboard_legacy";
 const FUNCTION_NAME_KEYBOARD: &str = "hid.keyboard";
 const FUNCTION_NAME_MOUSE_LEGACY: &str = "hid.mouse_legacy";
 const FUNCTION_NAME_MOUSE: &str = "hid.mouse";
-
+const FUNCTION_NAME_MSG: &str = "mass_storage.msg";
+const LUN_COUNT: u8 = 8;
 impl DeviceCtx {
     pub async fn new(configfs_base: &str) -> error::Result<Arc<RwLock<Self>>> {
         let mut gadget_info: GadgetInfo = Default::default();
         gadget_info.functions.insert(
             FUNCTION_NAME_KEYBOARD_LEGACY.into(),
-            Box::new(usb_otg::hid::keyboard::KEYBOARD_LEGACY_FHO.clone()),
+            Box::new(hid::keyboard::KEYBOARD_LEGACY_FHO.clone()),
         );
         gadget_info.functions.insert(
             FUNCTION_NAME_KEYBOARD.into(),
-            Box::new(usb_otg::hid::keyboard::KEYBOARD_FHO.clone()),
+            Box::new(hid::keyboard::KEYBOARD_FHO.clone()),
         );
         gadget_info.functions.insert(
             FUNCTION_NAME_MOUSE_LEGACY.into(),
-            Box::new(usb_otg::hid::mouse::MOUSE_LEGACY_FHO.clone()),
+            Box::new(hid::mouse::MOUSE_LEGACY_FHO.clone()),
         );
         gadget_info.functions.insert(
             FUNCTION_NAME_MOUSE.into(),
-            Box::new(usb_otg::hid::mouse::MOUSE_FHO.clone()),
+            Box::new(hid::mouse::MOUSE_FHO.clone()),
         );
-        // gadget_info.functions.insert(
-        //     "mass_storage.usb0".into(),
-        //     Box::new(usb_otg::mass_storage::FunctionMsgOpts::default()),
-        // );
+
+        let mut function_msg_opt = usb_otg::mass_storage::FunctionMsgOpts::default();
+
+        for i in 1..LUN_COUNT {
+            function_msg_opt.luns.insert(
+                usb_otg::mass_storage::FunctionMsgOpts::lun_name(i as u8),
+                usb_otg::mass_storage::MsgLun::default(),
+            );
+        }
+
+        for entry in function_msg_opt.luns.iter_mut() {
+            entry.1.removable = true;
+        }
+
+        gadget_info
+            .functions
+            .insert(FUNCTION_NAME_MSG.into(), Box::new(function_msg_opt));
 
         let mut usb_config: UsbConfiguration = Default::default();
         usb_config
@@ -224,6 +238,8 @@ struct Args {
     vnc_listen_addr: String,
     #[arg(long, default_value = "http://127.0.0.1:3002")]
     ustreamer_url: String,
+    #[arg(long, default_value = "images")]
+    image_dir: String,
 }
 
 type Client = hyper_util::client::legacy::Client<HttpConnector, Body>;
