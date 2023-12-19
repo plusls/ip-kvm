@@ -7,3 +7,5 @@ edition = "2021"
 
 [dependencies]
 thiserror = "1.0.51"
+num-traits = "0.2"
+parse_int = "0.6"

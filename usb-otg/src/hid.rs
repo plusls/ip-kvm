@@ -5,11 +5,11 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use util::fs;
 
-use crate::{Configurable, error, UsbFunctionOpts};
+use crate::{error, Configurable, UsbFunctionOpts};
 
+pub mod generic_desktop;
 pub mod keyboard;
 pub mod mouse;
-pub mod generic_desktop;
 
 #[derive(Clone)]
 pub struct FunctionHidOpts {
@@ -42,29 +42,31 @@ impl Configurable for FunctionHidOpts {
     fn apply_config(&mut self, base_dir: &dyn AsRef<Path>) -> error::Result<()> {
         let base_dir = base_dir.as_ref();
         fs::create_dir(base_dir)?;
-        self.read_dev(&base_dir)?;
         // 低版本内核可能没这个
-        let _ = fs::write(base_dir.join("no_out_endpoint"), self.no_out_endpoint.to_string());
+        let _ = fs::write(
+            base_dir.join("no_out_endpoint"),
+            self.no_out_endpoint.to_string(),
+        );
         fs::write(base_dir.join("protocol"), self.protocol.to_string())?;
         fs::write(base_dir.join("report_desc"), &self.report_desc)?;
-        fs::write(base_dir.join("report_length"), self.report_length.to_string())?;
+        fs::write(
+            base_dir.join("report_length"),
+            self.report_length.to_string(),
+        )?;
         fs::write(base_dir.join("subclass"), self.subclass.to_string())?;
+        self.from_config(&base_dir)?;
         Ok(())
     }
-    fn from_config(base_dir: &dyn AsRef<Path>) -> error::Result<Self> where Self: Sized {
+    fn from_config(&mut self, base_dir: &dyn AsRef<Path>) -> error::Result<()> {
         let base_dir = base_dir.as_ref();
-        let mut ret = Self {
-            major: 0,
-            minor: 0,
-            // 内核保证了 no_out_endpoint 的数据一定是合法的
-            no_out_endpoint: u8::from_str(&fs::read_to_string(base_dir.join("no_out_endpoint")).unwrap_or("0".into())).unwrap(),
-            protocol: u8::from_str(&fs::read_to_string(base_dir.join("protocol"))?).unwrap(),
-            report_desc: fs::read(base_dir.join("report_desc"))?,
-            report_length: u16::from_str(&fs::read_to_string(base_dir.join("report_length"))?).unwrap(),
-            subclass: u8::from_str(&fs::read_to_string(base_dir.join("subclass"))?).unwrap(),
-        };
-        ret.read_dev(&base_dir)?;
-        Ok(ret)
+        self.read_dev(&base_dir)?;
+        // 低版本内核可能没这个
+        self.no_out_endpoint = fs::read_to_num(base_dir.join("no_out_endpoint")).unwrap_or(0);
+        self.protocol = fs::read_to_num(base_dir.join("protocol"))?;
+        self.report_desc = fs::read(base_dir.join("report_desc"))?;
+        self.report_length = fs::read_to_num(base_dir.join("report_length"))?;
+        self.subclass = fs::read_to_num(base_dir.join("subclass"))?;
+        Ok(())
     }
 }
 
@@ -74,17 +76,18 @@ impl FunctionHidOpts {
     fn read_dev(&mut self, base_dir: &dyn AsRef<Path>) -> error::Result<()> {
         let base_dir = base_dir.as_ref();
         lazy_static! {
-            static ref RE_DEV_MATCH: Regex =
-                Regex::new(r"^(\d+):(\d+)$").unwrap();
+            static ref RE_DEV_MATCH: Regex = Regex::new(r"^(\d+):(\d+)$").unwrap();
         }
         let dev_string = fs::read_to_string(base_dir.join("dev"))?;
         let res = RE_DEV_MATCH.captures(dev_string.trim());
         if let Some(res) = res {
-            self.major = i32::from_str(&res[1]).unwrap();
-            self.minor = i32::from_str(&res[2]).unwrap();
+            self.major = i32::from_str(&res[1]).map_err(error::DeserializedError::from)?;
+            self.minor = i32::from_str(&res[2]).map_err(error::DeserializedError::from)?;
             Ok(())
         } else {
-            unreachable!()
+            Err(error::DeserializedError::Custom(format!(
+                "Can not deserialize dev_string: {dev_string}"
+            )))?
         }
     }
 }

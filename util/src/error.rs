@@ -19,6 +19,14 @@ where
 pub struct Error(pub Box<ErrorKind>);
 
 #[derive(ThisError, Debug)]
+#[error(transparent)]
+pub enum DeserializedError {
+    ParseInt(#[from] std::num::ParseIntError),
+    #[error("{0}")]
+    Custom(String),
+}
+
+#[derive(ThisError, Debug)]
 pub enum ErrorKind {
     #[error("IO error when processing {process_info}\nCause: {source}\nBacktrace: {backtrace}")]
     Io {
@@ -26,6 +34,8 @@ pub enum ErrorKind {
         process_info: String,
         backtrace: Backtrace,
     },
+    #[error("Deserialized error\nCause: {0}\nBacktrace: {1}")]
+    Deserialized(#[from] DeserializedError, Backtrace),
     #[error("Error: {msg}\nBacktrace: {backtrace}")]
     Custom { msg: String, backtrace: Backtrace },
 }

@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    path::Path,
-};
+use std::{collections::HashMap, path::Path};
 
 use util::{error, fs};
 
@@ -30,7 +27,6 @@ impl Default for FunctionMsgOpts {
 
 impl UsbFunctionOpts for FunctionMsgOpts {}
 
-
 impl Configurable for FunctionMsgOpts {
     fn apply_config(&mut self, base_dir: &dyn AsRef<Path>) -> error::Result<()> {
         let base_dir = base_dir.as_ref();
@@ -42,7 +38,14 @@ impl Configurable for FunctionMsgOpts {
         Ok(())
     }
 
-    fn cleanup<P: AsRef<Path>>(base_dir: P) -> error::Result<()> where Self: Sized {
+    fn from_config(&mut self, base_dir: &dyn AsRef<Path>) -> error::Result<()> {
+        todo!()
+    }
+
+    fn cleanup<P: AsRef<Path>>(base_dir: P) -> error::Result<()>
+    where
+        Self: Sized,
+    {
         let base_dir = base_dir.as_ref();
         if !base_dir.is_dir() {
             return Ok(());
@@ -61,7 +64,6 @@ impl Configurable for FunctionMsgOpts {
         Ok(())
     }
 }
-
 
 #[derive(Clone)]
 pub struct MsgLun {
@@ -96,12 +98,22 @@ impl Configurable for MsgLun {
         fs::write(base_dir.join("file"), &self.file)?;
         fs::write(base_dir.join("inquiry_string"), &self.inquiry_string)?;
         fs::write(base_dir.join("nofua"), if self.nofua { "1" } else { "0" })?;
-        fs::write(base_dir.join("removable"), if self.removable { "1" } else { "0" })?;
+        fs::write(
+            base_dir.join("removable"),
+            if self.removable { "1" } else { "0" },
+        )?;
         fs::write(base_dir.join("ro"), if self.ro { "1" } else { "0" })?;
         Ok(())
     }
 
-    fn cleanup<P: AsRef<Path>>(base_dir: P) -> error::Result<()> where Self: Sized {
+    fn from_config(&mut self, base_dir: &dyn AsRef<Path>) -> error::Result<()> {
+        todo!()
+    }
+
+    fn cleanup<P: AsRef<Path>>(base_dir: P) -> error::Result<()>
+    where
+        Self: Sized,
+    {
         let base_dir = base_dir.as_ref();
         if !base_dir.is_dir() {
             return Ok(());

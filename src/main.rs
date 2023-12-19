@@ -42,41 +42,50 @@ pub struct DeviceCtx {
 }
 
 const UDC_PATH: &str = "/sys/class/udc";
+const CONFIGURE_NAME: &str = "c.1";
+const FUNCTION_NAME_KEYBOARD_LEGACY: &str = "hid.keyboard_legacy";
+const FUNCTION_NAME_KEYBOARD: &str = "hid.keyboard";
+const FUNCTION_NAME_MOUSE_LEGACY: &str = "hid.mouse_legacy";
+const FUNCTION_NAME_MOUSE: &str = "hid.mouse";
 
 impl DeviceCtx {
     pub async fn new(configfs_base: &str) -> error::Result<Arc<RwLock<Self>>> {
         let mut gadget_info: GadgetInfo = Default::default();
         gadget_info.functions.insert(
-            "hid.usb0".into(),
+            FUNCTION_NAME_KEYBOARD_LEGACY.into(),
             Box::new(usb_otg::hid::keyboard::KEYBOARD_LEGACY_FHO.clone()),
         );
         gadget_info.functions.insert(
-            "hid.usb1".into(),
+            FUNCTION_NAME_KEYBOARD.into(),
             Box::new(usb_otg::hid::keyboard::KEYBOARD_FHO.clone()),
         );
         gadget_info.functions.insert(
-            "hid.usb2".into(),
+            FUNCTION_NAME_MOUSE_LEGACY.into(),
             Box::new(usb_otg::hid::mouse::MOUSE_LEGACY_FHO.clone()),
         );
         gadget_info.functions.insert(
-            "hid.usb3".into(),
+            FUNCTION_NAME_MOUSE.into(),
             Box::new(usb_otg::hid::mouse::MOUSE_FHO.clone()),
         );
-        gadget_info.functions.insert(
-            "mass_storage.usb0".into(),
-            Box::new(usb_otg::mass_storage::FunctionMsgOpts::default()),
-        );
+        // gadget_info.functions.insert(
+        //     "mass_storage.usb0".into(),
+        //     Box::new(usb_otg::mass_storage::FunctionMsgOpts::default()),
+        // );
 
         let mut usb_config: UsbConfiguration = Default::default();
-        usb_config.strings.insert(0x409, Default::default());
-        usb_config.functions.push("hid.usb0".into());
-        usb_config.functions.push("hid.usb1".into());
-        usb_config.functions.push("hid.usb2".into());
-        usb_config.functions.push("hid.usb3".into());
-        // usb_config.functions.push("mass_storage.usb0".into());
+        usb_config
+            .strings
+            .insert(usb_otg::LANGUAGE_CODE_ENGLISH, Default::default());
+        for function_name in gadget_info.functions.keys() {
+            usb_config.functions.push(function_name.into());
+        }
 
-        gadget_info.configs.insert("c.1".into(), usb_config);
-        gadget_info.strings.insert(0x409, Default::default());
+        gadget_info
+            .configs
+            .insert(CONFIGURE_NAME.into(), usb_config);
+        gadget_info
+            .strings
+            .insert(usb_otg::LANGUAGE_CODE_ENGLISH, Default::default());
 
         let mut udc_name = None;
         for entry in util::fs::read_dir(UDC_PATH)? {
@@ -104,24 +113,38 @@ impl DeviceCtx {
         GadgetInfo::cleanup(&usb_gadget_path)?;
         gadget_info.apply_config(&usb_gadget_path)?;
 
-        let keyboard_legacy_minor = (gadget_info.functions.get("hid.usb0").unwrap().as_ref()
-            as &dyn Any)
+        let keyboard_legacy_minor = (gadget_info
+            .functions
+            .get(FUNCTION_NAME_KEYBOARD_LEGACY)
+            .unwrap()
+            .as_ref() as &dyn Any)
             .downcast_ref::<hid::FunctionHidOpts>()
             .unwrap()
             .minor;
 
-        let keyboard_minor = (gadget_info.functions.get("hid.usb1").unwrap().as_ref() as &dyn Any)
+        let keyboard_minor = (gadget_info
+            .functions
+            .get(FUNCTION_NAME_KEYBOARD)
+            .unwrap()
+            .as_ref() as &dyn Any)
             .downcast_ref::<hid::FunctionHidOpts>()
             .unwrap()
             .minor;
 
-        let mouse_legacy_minor = (gadget_info.functions.get("hid.usb2").unwrap().as_ref()
-            as &dyn Any)
+        let mouse_legacy_minor = (gadget_info
+            .functions
+            .get(FUNCTION_NAME_MOUSE_LEGACY)
+            .unwrap()
+            .as_ref() as &dyn Any)
             .downcast_ref::<hid::FunctionHidOpts>()
             .unwrap()
             .minor;
 
-        let mouse_minor = (gadget_info.functions.get("hid.usb3").unwrap().as_ref() as &dyn Any)
+        let mouse_minor = (gadget_info
+            .functions
+            .get(FUNCTION_NAME_MOUSE)
+            .unwrap()
+            .as_ref() as &dyn Any)
             .downcast_ref::<hid::FunctionHidOpts>()
             .unwrap()
             .minor;
@@ -192,7 +215,7 @@ impl Drop for DeviceCtx {
         }
     }
 }
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     #[arg(long, default_value = "127.0.0.1:3000")]

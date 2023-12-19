@@ -28,6 +28,8 @@ pub enum UsbDeviceSpeed {
     UsbSpeedSuperPlus,
 }
 
+pub const LANGUAGE_CODE_ENGLISH: u16 = 0x409;
+
 impl UsbDeviceSpeed {
     fn as_str(&self) -> &'static str {
         match self {
@@ -44,12 +46,7 @@ impl UsbDeviceSpeed {
 
 pub trait Configurable: Any {
     fn apply_config(&mut self, base_dir: &dyn AsRef<Path>) -> error::Result<()>;
-    fn from_config(_base_dir: &dyn AsRef<Path>) -> error::Result<Self>
-    where
-        Self: Sized,
-    {
-        unimplemented!()
-    }
+    fn from_config(&mut self, base_dir: &dyn AsRef<Path>) -> error::Result<()>;
     fn cleanup<P: AsRef<Path>>(base_dir: P) -> error::Result<()>
     where
         Self: Sized,
@@ -71,6 +68,9 @@ impl Configurable for FunctionDummyOpts {
     fn apply_config(&mut self, _base_dir: &dyn AsRef<Path>) -> error::Result<()> {
         unreachable!()
     }
+    fn from_config(&mut self, base_dir: &dyn AsRef<Path>) -> error::Result<()> {
+        unreachable!()
+    }
 }
 
 impl UsbFunctionOpts for FunctionDummyOpts {}
@@ -87,7 +87,7 @@ pub struct GadgetInfo {
     pub id_product: u16,
     pub id_vendor: u16,
     pub max_speed: UsbDeviceSpeed,
-    pub os_desc: Option<OsDesc>,
+    pub os_desc: OsDesc,
     pub strings: HashMap<u16, GadgetStrings>,
     pub udc: String,
 }
@@ -106,7 +106,7 @@ impl Default for GadgetInfo {
             id_product: 0,
             id_vendor: 0,
             max_speed: UsbDeviceSpeed::UsbSpeedSuperPlus,
-            os_desc: None,
+            os_desc: Default::default(),
             strings: HashMap::new(),
             udc: "\n".to_string(),
         }
@@ -147,9 +147,7 @@ impl Configurable for GadgetInfo {
         fs::write(base_dir.join("idVendor"), self.id_vendor.to_string())?;
         // 低版本内核可能没有这个
         let _ = fs::write(base_dir.join("max_speed"), self.max_speed.as_str());
-        if let Some(os_desc) = &mut self.os_desc {
-            os_desc.apply_config(&base_dir.join("os_desc"))?;
-        }
+        self.os_desc.apply_config(&base_dir.join("os_desc"))?;
         let strings_base_dir = base_dir.join("strings");
         for entry in &mut self.strings {
             entry
@@ -158,6 +156,10 @@ impl Configurable for GadgetInfo {
         }
         fs::write(base_dir.join("UDC"), &self.udc)?;
         Ok(())
+    }
+
+    fn from_config(&mut self, _base_dir: &dyn AsRef<Path>) -> error::Result<()> {
+        todo!()
     }
 
     fn cleanup<P: AsRef<Path>>(base_dir: P) -> error::Result<()>
@@ -252,8 +254,19 @@ impl Configurable for UsbConfiguration {
             )
             .map_err(|err| error::ErrorKind::io(err, function_path))?;
         }
+        self.from_config(&base_dir)?;
         Ok(())
     }
+
+    fn from_config(&mut self, base_dir: &dyn AsRef<Path>) -> error::Result<()> {
+        let base_dir = base_dir.as_ref();
+        self.bm_attributes = fs::read_to_num(base_dir.join("bmAttributes"))?;
+        self.max_power = fs::read_to_num(base_dir.join("MaxPower"))?;
+        // TODO read strings dir
+        // TODO read functions
+        Ok(())
+    }
+
     fn cleanup<P: AsRef<Path>>(base_dir: P) -> error::Result<()>
     where
         Self: Sized,
@@ -303,11 +316,21 @@ impl Configurable for GadgetStrings {
         fs::write(base_dir.join("manufacturer"), &self.manufacturer)?;
         fs::write(base_dir.join("product"), &self.product)?;
         fs::write(base_dir.join("serialnumber"), &self.serialnumber)?;
+        self.from_config(&base_dir)?;
+        Ok(())
+    }
+
+    fn from_config(&mut self, base_dir: &dyn AsRef<Path>) -> error::Result<()> {
+        let base_dir = base_dir.as_ref();
+        self.manufacturer = fs::read_to_string(base_dir.join("manufacturer"))?;
+        self.product = fs::read_to_string(base_dir.join("product"))?;
+        self.serialnumber = fs::read_to_string(base_dir.join("serialnumber"))?;
         Ok(())
     }
 }
 
 pub struct OsDesc {
+    pub r#use: bool,
     pub b_vendor_code: u8,
     pub qw_sign: String,
 }
@@ -315,8 +338,10 @@ pub struct OsDesc {
 impl Default for OsDesc {
     fn default() -> Self {
         Self {
+            r#use: false,
             b_vendor_code: 0,
-            qw_sign: "\n".to_string(),
+            // \n 会直接卡死
+            qw_sign: "\n\n".to_string(),
         }
     }
 }
@@ -324,14 +349,24 @@ impl Default for OsDesc {
 impl Configurable for OsDesc {
     fn apply_config(&mut self, base_dir: &dyn AsRef<Path>) -> error::Result<()> {
         let base_dir = base_dir.as_ref();
-        fs::write(base_dir.join("use"), "1")?;
+        fs::write(base_dir.join("use"), if self.r#use { "1" } else { "0" })?;
         fs::write(
             base_dir.join("b_vendor_code"),
             self.b_vendor_code.to_string(),
         )?;
         fs::write(base_dir.join("qw_sign"), &self.qw_sign)?;
+        self.from_config(&base_dir)?;
         Ok(())
     }
+
+    fn from_config(&mut self, base_dir: &dyn AsRef<Path>) -> error::Result<()> {
+        let base_dir = base_dir.as_ref();
+        self.b_vendor_code = fs::read_to_num(base_dir.join("b_vendor_code"))?;
+        self.qw_sign = fs::read_to_string(base_dir.join("b_vendor_code"))?;
+        self.r#use = fs::read_to_bool(base_dir.join("use"))?;
+        Ok(())
+    }
+
     fn cleanup<P: AsRef<Path>>(base_dir: P) -> error::Result<()>
     where
         Self: Sized,
@@ -361,6 +396,13 @@ impl Configurable for GadgetConfigName {
         let base_dir = base_dir.as_ref();
         fs::create_dir(base_dir)?;
         fs::write(base_dir.join("configuration"), &self.configuration)?;
+        self.from_config(&base_dir)?;
+        Ok(())
+    }
+
+    fn from_config(&mut self, base_dir: &dyn AsRef<Path>) -> error::Result<()> {
+        let base_dir = base_dir.as_ref();
+        self.configuration = fs::read_to_string(base_dir.join("configuration"))?;
         Ok(())
     }
 }
