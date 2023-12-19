@@ -130,17 +130,17 @@ async fn send_keyboard_update(device_ctx: Arc<RwLock<DeviceCtx>>) -> ControlFlow
         let keyboard_device = &device_ctx.read().await.keyboard_device;
 
         if let Err(err) = keyboard_device.send().await {
-            eprintln!("keyboard_device.send failed: {err}");
+            log::error!("keyboard_device.send failed: {err}");
         }
         if let Err(err) = keyboard_device.send_legacy().await {
-            eprintln!("keyboard_device.send_legacy failed: {err}");
+            log::error!("keyboard_device.send_legacy failed: {err}");
         }
         ControlFlow::Continue(())
     });
     join_set.spawn(async {
         time::sleep(Duration::from_secs(5)).await;
-        eprintln!("keyboard_device send timeout.");
-        ControlFlow::Break(())
+        log::warn!("keyboard_device send timeout.");
+        ControlFlow::Continue(())
     });
 
     let ret = join_set.join_next().await.unwrap().unwrap();

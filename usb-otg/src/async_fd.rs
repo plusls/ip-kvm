@@ -28,7 +28,7 @@ impl AsRawFd for AsyncFd {
 impl Drop for AsyncFd {
     fn drop(&mut self) {
         if let Err(err) = nix::unistd::close(self.as_raw_fd()) {
-            eprintln!("Close failed: {err}");
+            log::error!("Close failed: {err}");
         }
     }
 }

@@ -185,13 +185,6 @@ impl Configurable for GadgetInfo {
             if let Some(path_file_name) = path.file_name() {
                 if let Some(path_file_name) = path_file_name.to_str() {
                     log::debug!("Now clean {}", path.display());
-                    println!(
-                        "fuck3 {path_file_name:?} {} {} {} {}!",
-                        path_file_name.starts_with(GadgetInfo::HID),
-                        path_file_name.starts_with(GadgetInfo::MASS_STORAGE),
-                        GadgetInfo::MASS_STORAGE,
-                        GadgetInfo::HID
-                    );
                     if path_file_name.starts_with(GadgetInfo::HID) {
                         FunctionHidOpts::cleanup(path)?;
                     } else if path_file_name.starts_with(GadgetInfo::MASS_STORAGE) {

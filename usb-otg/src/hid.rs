@@ -8,6 +8,7 @@ use util::fs;
 use crate::{error, Configurable, UsbFunctionOpts};
 
 pub mod generic_desktop;
+pub mod hid_composite;
 pub mod keyboard;
 pub mod mouse;
 

@@ -36,6 +36,7 @@ const CONFIGFS_BASE: &str = "/sys/kernel/config/usb_gadget";
 
 pub struct DeviceCtx {
     usb_gadget_path: String,
+    hid_composite_device: hid::hid_composite::HidCompositeDevice,
     keyboard_device: hid::keyboard::KeyboardDevice,
     mouse_device: hid::mouse::MouseDevice,
     join_set: Mutex<JoinSet<()>>,
@@ -44,9 +45,8 @@ pub struct DeviceCtx {
 const UDC_PATH: &str = "/sys/class/udc";
 const CONFIGURE_NAME: &str = "c.1";
 const FUNCTION_NAME_KEYBOARD_LEGACY: &str = "hid.keyboard_legacy";
-const FUNCTION_NAME_KEYBOARD: &str = "hid.keyboard";
 const FUNCTION_NAME_MOUSE_LEGACY: &str = "hid.mouse_legacy";
-const FUNCTION_NAME_MOUSE: &str = "hid.mouse";
+const FUNCTION_NAME_HID_COMPOSITE: &str = "hid.hid_composite";
 const FUNCTION_NAME_MSG: &str = "mass_storage.msg";
 const LUN_COUNT: u8 = 8;
 impl DeviceCtx {
@@ -57,16 +57,12 @@ impl DeviceCtx {
             Box::new(hid::keyboard::KEYBOARD_LEGACY_FHO.clone()),
         );
         gadget_info.functions.insert(
-            FUNCTION_NAME_KEYBOARD.into(),
-            Box::new(hid::keyboard::KEYBOARD_FHO.clone()),
-        );
-        gadget_info.functions.insert(
             FUNCTION_NAME_MOUSE_LEGACY.into(),
             Box::new(hid::mouse::MOUSE_LEGACY_FHO.clone()),
         );
         gadget_info.functions.insert(
-            FUNCTION_NAME_MOUSE.into(),
-            Box::new(hid::mouse::MOUSE_FHO.clone()),
+            FUNCTION_NAME_HID_COMPOSITE.into(),
+            Box::new(hid::hid_composite::HID_COMPOSITE_FHO.clone()),
         );
 
         let mut function_msg_opt = usb_otg::mass_storage::FunctionMsgOpts::default();
@@ -136,15 +132,6 @@ impl DeviceCtx {
             .unwrap()
             .minor;
 
-        let keyboard_minor = (gadget_info
-            .functions
-            .get(FUNCTION_NAME_KEYBOARD)
-            .unwrap()
-            .as_ref() as &dyn Any)
-            .downcast_ref::<hid::FunctionHidOpts>()
-            .unwrap()
-            .minor;
-
         let mouse_legacy_minor = (gadget_info
             .functions
             .get(FUNCTION_NAME_MOUSE_LEGACY)
@@ -154,9 +141,9 @@ impl DeviceCtx {
             .unwrap()
             .minor;
 
-        let mouse_minor = (gadget_info
+        let hid_composite_minor = (gadget_info
             .functions
-            .get(FUNCTION_NAME_MOUSE)
+            .get(FUNCTION_NAME_HID_COMPOSITE)
             .unwrap()
             .as_ref() as &dyn Any)
             .downcast_ref::<hid::FunctionHidOpts>()
@@ -164,15 +151,13 @@ impl DeviceCtx {
             .minor;
 
         log::info!(
-            "keyboard_legacy_minor: {keyboard_legacy_minor} keyboard_minor: {keyboard_minor}"
+            "keyboard_legacy_minor: {keyboard_legacy_minor} mouse_legacy_minor: {mouse_legacy_minor} hid_composite_minor: {hid_composite_minor}"
         );
-        log::info!("mouse_legacy_minor: {mouse_legacy_minor} mouse_minor: {mouse_minor}");
 
         let hid_path_list: Vec<_> = [
             keyboard_legacy_minor,
-            keyboard_minor,
             mouse_legacy_minor,
-            mouse_minor,
+            hid_composite_minor,
         ]
         .iter()
         .map(|hid_id| std::path::Path::new(&format!("/dev/hidg{hid_id}")).to_path_buf())
@@ -182,12 +167,21 @@ impl DeviceCtx {
         while hid_path_list.iter().any(|hid_path| !hid_path.exists()) {
             time::sleep(Duration::from_millis(500)).await;
         }
-
-        let keyboard_device =
-            hid::keyboard::KeyboardDevice::new(keyboard_minor, keyboard_legacy_minor).await?;
-        let mouse_device = hid::mouse::MouseDevice::new(mouse_minor, mouse_legacy_minor).await?;
+        let hid_composite_device =
+            hid::hid_composite::HidCompositeDevice::new(hid_composite_minor).await?;
+        let keyboard_device = hid::keyboard::KeyboardDevice::new(
+            keyboard_legacy_minor,
+            hid_composite_device.hid_composite_dev_send_sender.clone(),
+        )
+        .await?;
+        let mouse_device = hid::mouse::MouseDevice::new(
+            mouse_legacy_minor,
+            hid_composite_device.hid_composite_dev_send_sender.clone(),
+        )
+        .await?;
         let ret = Arc::new(RwLock::new(Self {
             join_set: Mutex::new(JoinSet::new()),
+            hid_composite_device,
             keyboard_device,
             mouse_device,
             usb_gadget_path,
@@ -195,13 +189,45 @@ impl DeviceCtx {
         let device_ctx = ret.write().await;
         let join_set = &device_ctx.join_set;
         let ret_recv = ret.clone();
+
+        // 从复合 hid 设备中读取响应，并根据类型转发给对应的设备
         join_set.lock().await.spawn(async move {
             let device_ctx = ret_recv.read().await;
+            let hid_composite_device = &device_ctx.hid_composite_device;
             let keyboard_device = &device_ctx.keyboard_device;
             loop {
-                keyboard_device.recv().await.unwrap();
+                let res = hid_composite_device.recv().await;
+
+                if let Err(error::Error(err)) = &res {
+                    if let error::ErrorKind::Ignore = err.as_ref() {
+                        continue;
+                    }
+                }
+                let payload = res.unwrap();
+                assert!(payload[0] == hid::hid_composite::HID_REPORT_ID_KEYBOARD);
+                keyboard_device.recv(&payload).await.unwrap();
             }
         });
+
+        // 复合 hid 设备接受来自其它设备的请求，并发送给 /dev/
+        let hid_composite_ret = ret.clone();
+        join_set.lock().await.spawn(async move {
+            let device_ctx = hid_composite_ret.read().await;
+            let hid_composite_device = &device_ctx.hid_composite_device;
+            let mut hid_composite_dev_receiver = hid_composite_device
+                .hid_composite_dev_send_sender
+                .subscribe();
+
+            loop {
+                if hid_composite_dev_receiver.changed().await.is_ok() {
+                    let hid_composite_send_data =
+                        hid_composite_dev_receiver.borrow_and_update().to_vec();
+                    // 电脑关机后 send 会失败
+                    let _ = hid_composite_device.send(&hid_composite_send_data).await;
+                }
+            }
+        });
+
         let recv_legacy = ret.clone();
         join_set.lock().await.spawn(async move {
             let device_ctx = recv_legacy.read().await;

@@ -69,18 +69,13 @@ impl Configurable for FunctionMsgOpts {
     where
         Self: Sized,
     {
-        println!("fuck1");
         let base_dir = base_dir.as_ref();
         if !base_dir.is_dir() {
             return Ok(());
         }
-        println!("fuck2");
-
-        log::info!("path: {base_dir:?}");
         for entry in fs::read_dir(base_dir.join("."))? {
             let entry = entry.map_err(|err| error::ErrorKind::io(err, "."))?;
             let path = entry.path();
-            log::info!("path: {path:?}");
             if let Some(path_file_name) = path.file_name() {
                 if path.is_dir() && path_file_name != Self::lun_name(0).as_str() {
                     MsgLun::cleanup(base_dir.join(path_file_name))?;

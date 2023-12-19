@@ -93,14 +93,14 @@ async fn process_message(
             join_set.spawn(async move {
                 let mouse_device = &device_ctx_send.read().await.mouse_device;
                 if let Err(err) = mouse_device.send_legacy(x, y, wheel).await {
-                    eprintln!("mouse_legacy_device.send failed: {err}");
+                    log::error!("mouse_legacy_device.send failed: {err}");
                 }
                 ControlFlow::Continue(())
             });
             join_set.spawn(async {
                 time::sleep(Duration::from_secs(5)).await;
-                eprintln!("mouse_legacy_device send timeout.");
-                ControlFlow::Break(())
+                log::warn!("mouse_legacy_device send timeout.");
+                ControlFlow::Continue(())
             });
 
             let ret = join_set.join_next().await.unwrap().unwrap();

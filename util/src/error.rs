@@ -36,6 +36,8 @@ pub enum ErrorKind {
     },
     #[error("Deserialized error\nCause: {0}\nBacktrace: {1}")]
     Deserialized(#[from] DeserializedError, Backtrace),
+    #[error("Ignore error")]
+    Ignore,
     #[error("Error: {msg}\nBacktrace: {backtrace}")]
     Custom { msg: String, backtrace: Backtrace },
 }

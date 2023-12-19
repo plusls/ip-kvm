@@ -1,14 +1,16 @@
+use std::sync::Arc;
+
 use lazy_static::lazy_static;
 use nix::fcntl;
 use nix::sys::stat::Mode;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::Mutex;
 use tokio::sync::watch::Sender;
+use tokio::sync::Mutex;
 use util::error;
 
 use crate::async_fd::AsyncFd;
 use crate::hid;
-use crate::hid::generic_desktop;
+use crate::hid::{generic_desktop, hid_composite};
 
 pub mod usage_id {
     pub const KEYBOARD_ERROR_ROLL_OVER: u16 = 0x1;
@@ -271,60 +273,7 @@ lazy_static! {
             0xc0            /* END_COLLECTION                         */
         ],
     };
-
-    pub static ref KEYBOARD_FHO: hid::FunctionHidOpts = hid::FunctionHidOpts {
-        major: 0,
-        minor: 0,
-        no_out_endpoint: 1,
-        subclass: 1, /* Boot Interface SubClass */
-        protocol: 1,  /* Keyboard */
-        report_length: 0x22,
-        report_desc: vec![
-            // Keyboard
-            0x05, 0x01,     /* USAGE_PAGE (Generic Desktop)           */
-            0x09, 0x06,     /* USAGE (Keyboard)                       */
-            0xa1, 0x01,     /* COLLECTION (Application)               */
-
-            // Keys
-            0x05, 0x07,     /*   USAGE_PAGE (Keyboard)                */
-            0x19, 0x00,     /*   USAGE_MINIMUM (Reserved) */
-            0x2a, 0xff, 0x00,     /*   USAGE_MAXIMUM (0xff)   */
-            0x15, 0x00,     /*   LOGICAL_MINIMUM (0)                  */
-            0x25, 0x01,     /*   LOGICAL_MAXIMUM (1)                  */
-            0x75, 0x01,     /*   REPORT_SIZE (1)                      */
-            0x96, 0x00, 0x01,     /*   REPORT_COUNT (0x100)                     */
-            0x81, 0x02,     /*   INPUT (Data,Var,Abs)                 */
-
-            // Sys Control
-            0x05, 0x01,        // Usage Page (Generic Desktop Ctrls)
-            0x09, 0x80,        // Usage (Sys Control)
-            0x19, 0x81,        //   Usage Minimum (Sys Power Down)
-            0x29, 0x8f,        //   Usage Maximum (Sys Warm Restart)
-            0x15, 0x00,     /*   LOGICAL_MINIMUM (0)                  */
-            0x25, 0x01,     /*   LOGICAL_MAXIMUM (1)                  */
-            0x75, 0x01,     /*   REPORT_SIZE (1)                      */
-            0x95, 0x0f,     /*   REPORT_COUNT (0xf)                     */
-            0x81, 0x02,     /*   INPUT (Data,Var,Abs)                 */
-
-            // Padding
-            0x75, 0x01,     /*   REPORT_SIZE (1)                      */
-            0x95, 0x01,     /*   REPORT_COUNT (1)                     */
-            0x81, 0x03,     /*   INPUT (Cnst,Var,Abs)                 */
-
-            // LEDs Output
-            0x05, 0x08,     /*   USAGE_PAGE (LEDs)                    */
-            0x19, 0x00,     /*   USAGE_MINIMUM (Undefined)            */
-            0x2a, 0xff, 0x00,     /*   USAGE_MAXIMUM (0xff)                 */
-            0x75, 0x01,     /*   REPORT_SIZE (1)                      */
-            0x96, 0x00, 0x01,     /*   REPORT_COUNT (8)                     */
-            0x91, 0x02,     /*   OUTPUT (Data,Var,Abs)                */
-
-            0xc0            /* END_COLLECTION                         */
-        ],
-    };
 }
-
-
 
 #[derive(Default)]
 pub struct Keyboard {
@@ -393,7 +342,6 @@ impl Keyboard {
         false
     }
 
-
     pub fn get_payload(&self) -> [u8; 0x22] {
         let mut ret = [0; 0x22];
         let (left, right) = ret.split_at_mut(0x20);
@@ -426,124 +374,123 @@ impl Keyboard {
     }
 }
 
-
 pub struct KeyboardDevice {
     pub keyboard: Mutex<Keyboard>,
-    keyboard_dev_read: Mutex<AsyncFd>,
-    keyboard_dev_write: Mutex<AsyncFd>,
     keyboard_legacy_dev_read: Mutex<AsyncFd>,
     keyboard_legacy_dev_write: Mutex<AsyncFd>,
     pub keyboard_update_sender: Sender<[u8; 0x20]>,
+    hid_composite_dev_send_sender: Arc<Sender<[u8; hid_composite::HID_COMPOSITE_SEND_LENGTH]>>,
 }
 
 impl KeyboardDevice {
     // AsyncFd::new must call in tokio async runtime
-    pub async fn new(keyboard_minor: i32, keyboard_legacy_minor: i32) -> error::Result<Self> {
-        let keyboard_dev_name = format!("/dev/hidg{keyboard_minor}");
+    pub async fn new(
+        keyboard_legacy_minor: i32,
+        hid_composite_dev_send_sender: Arc<Sender<[u8; hid_composite::HID_COMPOSITE_SEND_LENGTH]>>,
+    ) -> error::Result<Self> {
         let keyboard_legacy_dev_name = format!("/dev/hidg{keyboard_legacy_minor}");
 
-        let keyboard_dev_read =
-            AsyncFd::try_from(fcntl::open(keyboard_dev_name.as_str(), fcntl::OFlag::O_RDONLY, Mode::empty())
-                .map_err(|err| error::ErrorKind::io(err.into(), &keyboard_dev_name))?
-            ).unwrap();
+        let keyboard_legacy_dev_read = AsyncFd::try_from(
+            fcntl::open(
+                keyboard_legacy_dev_name.as_str(),
+                fcntl::OFlag::O_RDONLY,
+                Mode::empty(),
+            )
+            .map_err(|err| error::ErrorKind::io(err.into(), &keyboard_legacy_dev_name))?,
+        )
+        .unwrap();
 
-        let keyboard_dev_write =
-            AsyncFd::try_from(fcntl::open(keyboard_dev_name.as_str(), fcntl::OFlag::O_WRONLY, Mode::empty())
-                .map_err(|err| error::ErrorKind::io(err.into(), &keyboard_dev_name))?
-            ).unwrap();
-
-        let keyboard_legacy_dev_read =
-            AsyncFd::try_from(fcntl::open(keyboard_legacy_dev_name.as_str(), fcntl::OFlag::O_RDONLY, Mode::empty())
-                .map_err(|err| error::ErrorKind::io(err.into(), &keyboard_legacy_dev_name))?
-            ).unwrap();
-
-
-        let keyboard_legacy_dev_write =
-            AsyncFd::try_from(fcntl::open(keyboard_legacy_dev_name.as_str(), fcntl::OFlag::O_WRONLY, Mode::empty())
-                .map_err(|err| error::ErrorKind::io(err.into(), &keyboard_legacy_dev_name))?
-            ).unwrap();
+        let keyboard_legacy_dev_write = AsyncFd::try_from(
+            fcntl::open(
+                keyboard_legacy_dev_name.as_str(),
+                fcntl::OFlag::O_WRONLY,
+                Mode::empty(),
+            )
+            .map_err(|err| error::ErrorKind::io(err.into(), &keyboard_legacy_dev_name))?,
+        )
+        .unwrap();
 
         let (sender, _) = tokio::sync::watch::channel([0; 0x20]);
         let ret = Self {
             keyboard: Default::default(),
-            keyboard_dev_read: Mutex::new(keyboard_dev_read),
-            keyboard_dev_write: Mutex::new(keyboard_dev_write),
             keyboard_legacy_dev_read: Mutex::new(keyboard_legacy_dev_read),
             keyboard_legacy_dev_write: Mutex::new(keyboard_legacy_dev_write),
             keyboard_update_sender: sender,
+            hid_composite_dev_send_sender,
         };
 
         Ok(ret)
     }
 
     pub async fn set_key(&self, key_id: u16, status: bool) -> bool {
-        return self.keyboard.lock().await
-            .set_key(key_id, status);
+        return self.keyboard.lock().await.set_key(key_id, status);
     }
 
     pub async fn set_sys_control_key(&self, sys_control_key_id: u16, status: bool) -> bool {
-        return self.keyboard.lock().await
+        return self
+            .keyboard
+            .lock()
+            .await
             .set_sys_control_key(sys_control_key_id, status);
     }
 
     pub async fn recv_legacy(&self) -> error::Result<()> {
         let mut led_buf = [0_u8];
         let mut keyboard_legacy_dev_read = self.keyboard_legacy_dev_read.lock().await;
-        keyboard_legacy_dev_read.read_exact(&mut led_buf).await
+        keyboard_legacy_dev_read
+            .read_exact(&mut led_buf)
+            .await
             .map_err(|err| error::ErrorKind::io(err, "keyboard_legacy_dev"))?;
-        println!("keyboard_legacy_dev: {led_buf:?}");
+        log::debug!("keyboard_legacy_dev: {led_buf:?}");
         let mut keyboard = self.keyboard.lock().await;
         keyboard.led[0] = (keyboard.led[0] & 0xe0) | (led_buf[0] & 0x1f);
 
-        self.keyboard_update_sender.send_if_modified(|keyboard_state| {
-            if keyboard_state[0] != keyboard.led[0] {
-                keyboard_state[0] = keyboard.led[0];
-                true
-            } else {
-                false
-            }
-        });
+        self.keyboard_update_sender
+            .send_if_modified(|keyboard_state| {
+                if keyboard_state[0] != keyboard.led[0] {
+                    keyboard_state[0] = keyboard.led[0];
+                    true
+                } else {
+                    false
+                }
+            });
         Ok(())
     }
 
-    pub async fn recv(&self) -> error::Result<()> {
-        let mut led_buf = [0_u8; 0x20];
-        let mut keyboard_dev_read = self.keyboard_dev_read.lock().await;
-        let read_len = keyboard_dev_read.read(&mut led_buf).await
-            .map_err(|err| error::ErrorKind::io(err, "keyboard_dev"))?;
-        if read_len != 0x20 {
-            println!("keyboard_dev ignore: {:?}", &led_buf[..read_len]);
-            return Ok(());
-        }
-        println!("keyboard_dev: {led_buf:?}");
+    pub async fn recv(&self, hid_composite_recv_data: &[u8]) -> error::Result<()> {
+        let led_buf = &hid_composite_recv_data[1..0x21];
+        log::debug!("hid_composite_dev led_buf: {:?}", led_buf);
         let mut keyboard = self.keyboard.lock().await;
         keyboard.led.copy_from_slice(&led_buf);
-        self.keyboard_update_sender.send_if_modified(|keyboard_state| {
-            let mut ret = false;
-            for i in 0..0x20_usize {
-                if keyboard_state[i] != keyboard.led[i] {
-                    keyboard_state[i] = keyboard.led[i];
-                    ret = true;
+        self.keyboard_update_sender
+            .send_if_modified(|keyboard_state| {
+                let mut ret = false;
+                for i in 0..0x20_usize {
+                    if keyboard_state[i] != keyboard.led[i] {
+                        keyboard_state[i] = keyboard.led[i];
+                        ret = true;
+                    }
                 }
-            }
-            ret
-        });
+                ret
+            });
         Ok(())
     }
 
     pub async fn send(&self) -> error::Result<()> {
-        let mut keyboard_dev = self.keyboard_dev_write.lock().await;
-        let payload = self.keyboard.lock().await.get_payload();
-        println!("send {payload:?}");
-        keyboard_dev.write_all(&payload).await
-            .map_err(|err| error::ErrorKind::io(err, "keyboard_dev"))?;
+        let mut payload = [0_u8; hid_composite::HID_COMPOSITE_SEND_LENGTH];
+        payload[0] = hid_composite::HID_REPORT_ID_KEYBOARD;
+        payload[1..1+0x22].copy_from_slice(&self.keyboard.lock().await.get_payload());
+        log::debug!("hid_composite_dev send keyboard {payload:?}");
+        self.hid_composite_dev_send_sender.send(payload).unwrap();
         Ok(())
     }
     pub async fn send_legacy(&self) -> error::Result<()> {
         let mut keyboard_legacy_dev = self.keyboard_legacy_dev_write.lock().await;
         let payload = self.keyboard.lock().await.get_legacy_payload();
-        println!("send_legacy {payload:?}");
-        keyboard_legacy_dev.write_all(&payload).await
+        log::debug!("send_legacy {payload:?}");
+        keyboard_legacy_dev
+            .write_all(&payload)
+            .await
             .map_err(|err| error::ErrorKind::io(err, "keyboard_legacy_dev"))?;
         Ok(())
     }
